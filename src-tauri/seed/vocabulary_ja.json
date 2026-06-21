@@ -1,0 +1,42 @@
+[
+  {
+    "word": "橋",
+    "reading": "はし",
+    "translation": "ponte",
+    "language": "ja",
+    "difficulty": 1,
+    "pitch_pattern": "heiban"
+  },
+  {
+    "word": "箸",
+    "reading": "はし",
+    "translation": "hashi (pauzinhos)",
+    "language": "ja",
+    "difficulty": 1,
+    "pitch_pattern": "atamadaka"
+  },
+  {
+    "word": "水",
+    "reading": "みず",
+    "translation": "água",
+    "language": "ja",
+    "difficulty": 1,
+    "pitch_pattern": "heiban"
+  },
+  {
+    "word": "ありがとう",
+    "reading": "ありがとう",
+    "translation": "obrigado",
+    "language": "ja",
+    "difficulty": 2,
+    "pitch_pattern": "heiban"
+  },
+  {
+    "word": "きっぷ",
+    "reading": "きっぷ",
+    "translation": "passagem (bilhete)",
+    "language": "ja",
+    "difficulty": 2,
+    "pitch_pattern": "heiban"
+  }
+]

@@ -1,0 +1,31 @@
+[package]
+name = "kotoba"
+version = "0.1.0"
+description = "Kotoba — offline pronunciation tutor"
+authors = ["Kotoba"]
+edition = "2021"
+
+[lib]
+name = "kotoba_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate", "uuid"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
+thiserror = "2"
+dirs = "6"
+sha2 = "0.10"
+hex = "0.4"
+futures-util = "0.3"

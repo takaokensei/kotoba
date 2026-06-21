@@ -1,0 +1,37 @@
+[
+  {
+    "word": "hello",
+    "reading": null,
+    "translation": "olá",
+    "language": "en",
+    "difficulty": 1
+  },
+  {
+    "word": "water",
+    "reading": null,
+    "translation": "água",
+    "language": "en",
+    "difficulty": 1
+  },
+  {
+    "word": "thank you",
+    "reading": null,
+    "translation": "obrigado",
+    "language": "en",
+    "difficulty": 2
+  },
+  {
+    "word": "beautiful",
+    "reading": null,
+    "translation": "bonito",
+    "language": "en",
+    "difficulty": 2
+  },
+  {
+    "word": "pronunciation",
+    "reading": null,
+    "translation": "pronúncia",
+    "language": "en",
+    "difficulty": 3
+  }
+]
