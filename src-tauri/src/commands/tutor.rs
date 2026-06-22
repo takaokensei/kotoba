@@ -16,6 +16,7 @@ use tracing::{info, warn};
 use crate::db;
 use crate::llm::honesty_gate::{self, GateVerdict};
 use crate::llm::daemon_waker;
+use crate::scoring::composition::ScoreBreakdown;
 
 #[derive(Serialize)]
 struct OllamaRequest {
@@ -77,17 +78,56 @@ pub async fn generate_tutor_feedback(
         .map_err(|e| format!("Erro no banco de dados: {e}"))?
         .ok_or_else(|| format!("Palavra não encontrada: {word_id}"))?;
 
-    // 2. Select appropriate system prompt based on language.
+    // ── Perfect Score Protocol (Task 4.4) ──
+    // If the user achieved a flawless 100% score, immediately validate and congratulate
+    // without calling the LLM to prevent any possible hallucinations.
+    if score == 100 {
+        let perfect_feedback = "Parabéns! Sua pronúncia foi perfeita e idêntica à de um falante nativo. Excelente trabalho!";
+        if !attempt_id.is_empty() {
+            let _ = db::update_attempt_feedback(&pool, &attempt_id, perfect_feedback).await;
+        }
+        return Ok(perfect_feedback.to_string());
+    }
+
+    // 2. Select appropriate system prompt based on language with strict guardrails (Task 4.4 / Task 5.1).
     let system_prompt = if row.language == "ja" {
         "Você é um tutor de japonês atencioso, empático e detalhista. Seu objetivo é ajudar um estudante brasileiro a melhorar a pronúncia das palavras.\n\
-         Compare a palavra original e sua leitura (geralmente em hiragana/romaji) com a transcrição que o aluno pronunciou.\n\
-         Dê dicas práticas de pronúncia em português brasileiro, focando nas diferenças entre o som produzido pelo aluno e a pronúncia correta (como alongamento de vogais, pronúncia de consoantes duplas/pequeno tsu, ou padrão de entonação/pitch-accent se aplicável).\n\
-         Seja breve e construtivo. Ignore pontuações como pontos finais, exclamação ou interrogação no texto transcrito. Se o score for baixo, aponte diretamente onde o aluno errou e como praticar."
+         [DIRETRIZES ABSOLUTAS E OBRIGATÓRIAS]\n\
+         - ELIMINAÇÃO DE JARGÃO: É estritamente proibido usar jargões fonéticos complexos como \"alveolar\", \"bilabial\", \"velar\" ou \"fricativa\" (e suas variações). Explique como posicionar a língua e os lábios de forma simples e leiga (exemplo: coloque a ponta da língua atrás dos dentes de cima).\n\
+         - FOCO PRÁTICO: Dê dicas totalmente focadas na mecânica real: postura da boca/lábios, pausas para respiração (especialmente antes de consoantes duplas/sokuon) e ritmo/tempo da fala comparando com a palavra original.\n\
+         - DIRETRIZ CRÍTICA DE ALINHAMENTO: Você receberá um detalhamento de notas (score breakdown) contendo 'text_score' (similaridade ortográfica) e 'phonetic_score' (similaridade fonética/de pronúncia). Se 'phonetic_score' for 100% ou muito próximo disso (ex: >= 90%), a pronúncia do usuário foi matematicamente perfeita. Se o score total ou o 'text_score' for baixo, isso se deve estritamente a uma discrepância ortográfica (exemplo: Kanji vs. Hiragana). Nesse cenário, NÃO alucine erros anatômicos, de respiração ou de posicionamento da língua. Em vez disso, parabenize a pronúncia impecável e note gentilmente a variação de escrita.\n\
+         Seja breve e construtivo. Ignore pontuações como pontos finais ou exclamações na transcrição obtida."
     } else {
         "Você é um tutor de inglês atencioso, empático e detalhista. Seu objetivo é ajudar um estudante brasileiro a melhorar a pronúncia das palavras.\n\
-         Compare a palavra original com a transcrição que o aluno pronunciou.\n\
-         Dê dicas práticas de pronúncia em português brasileiro, focando em erros comuns de brasileiros (como o som do 'r' ou 'l' final, vogais curtas/longas, ou o acréscimo de vogais no final de palavras terminadas em consoantes).\n\
-         Seja breve e construtivo. Ignore pontuações no texto transcrito. Se o score for baixo, aponte diretamente onde o aluno errou e como praticar."
+         [DIRETRIZES ABSOLUTAS E OBRIGATÓRIAS]\n\
+         - ELIMINAÇÃO DE JARGÃO: É estritamente proibido usar jargões fonéticos complexos como \"alveolar\", \"bilabial\", \"velar\" ou \"fricativa\" (e suas variações). Explique como posicionar a língua e os lábios de forma simples e leiga.\n\
+         - FOCO PRÁTICO: Dê dicas totalmente focadas na mecânica real: postura da boca/lábios, pausas para respiração e ritmo/tempo da fala comparando com a palavra original.\n\
+         - DIRETRIZ CRÍTICA DE ALINHAMENTO: Você receberá um detalhamento de notas (score breakdown) contendo 'text_score' (similaridade ortográfica) e 'phonetic_score' (similaridade fonética/de pronúncia). Se 'phonetic_score' for 100% ou muito próximo disso (ex: >= 90%), a pronúncia do usuário foi matematicamente perfeita. Se o score total ou o 'text_score' for baixo, isso se deve estritamente a uma discrepância de digitação ou representação escrita. Nesse cenário, NÃO alucine erros anatômicos, de respiração ou de posicionamento da língua. Em vez disso, parabenize a pronúncia impecável e note gentilmente a variação de escrita.\n\
+         Seja breve e construtivo. Ignore pontuações como pontos finais ou exclamações na transcrição obtida."
+    };
+
+    // Extract score breakdown components (Task 5.1)
+    let mut text_score = score as f64 / 100.0;
+    let mut phonetic_score = None;
+
+    if !attempt_id.is_empty() {
+        if let Ok(Some(breakdown_str)) = sqlx::query_scalar::<_, String>(
+            "SELECT score_breakdown FROM attempt WHERE id = ?"
+        )
+        .bind(&attempt_id)
+        .fetch_optional(pool.inner())
+        .await
+        {
+            if let Ok(breakdown) = serde_json::from_str::<ScoreBreakdown>(&breakdown_str) {
+                text_score = breakdown.text;
+                phonetic_score = breakdown.phonetic;
+            }
+        }
+    }
+
+    let phonetic_score_str = match phonetic_score {
+        Some(s) => format!("{:.0}%", s * 100.0),
+        None => "não aplicável (V1)".to_string(),
     };
 
     // 3. Construct the prompt context.
@@ -98,7 +138,10 @@ pub async fn generate_tutor_feedback(
          Tradução: {}\n\
          Padrão de Pitch (Entonação): {}\n\
          Transcrição obtida do áudio do aluno: {}\n\
-         Score de similaridade determinístico (0-100): {}\n\n\
+         Score Total (0-100): {}\n\
+         Score Breakdown:\n\
+         - text_score (similaridade de escrita): {:.0}%\n\
+         - phonetic_score (similaridade de pronúncia): {}\n\n\
          Com base nos dados acima, forneça um feedback construtivo e dicas de pronúncia em português brasileiro.",
         if row.language == "ja" { "Japonês" } else { "Inglês" },
         row.word,
@@ -106,7 +149,9 @@ pub async fn generate_tutor_feedback(
         row.translation,
         row.pitch_pattern.as_deref().unwrap_or("não especificado"),
         user_transcription,
-        score
+        score,
+        text_score * 100.0,
+        phonetic_score_str
     );
 
     // 4. Determine which model to use.
