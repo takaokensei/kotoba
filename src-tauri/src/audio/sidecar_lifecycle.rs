@@ -84,6 +84,7 @@ fn resolve_sidecar_path(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, S
 pub async fn run_whisper_transcription(
     app: &tauri::AppHandle,
     model_path: &str,
+    language: &str,
     wav_bytes: &[u8],
 ) -> Result<String, String> {
     load_whisper();
@@ -91,41 +92,48 @@ pub async fn run_whisper_transcription(
     let sidecar_path = resolve_sidecar_path(app, "whisper-cli")?;
     tracing::info!(path = %sidecar_path.display(), "Executando sidecar do whisper");
     
-    let result = run_transcription_internal(&sidecar_path, model_path, wav_bytes).await;
+    let result = run_transcription_with_tempfile(&sidecar_path, model_path, language, wav_bytes).await;
     
     unload_whisper();
     result
 }
 
-async fn run_transcription_internal(
+async fn run_transcription_with_tempfile(
     sidecar_path: &std::path::Path,
     model_path: &str,
+    language: &str,
     wav_bytes: &[u8],
 ) -> Result<String, String> {
-    // 1. Try passing WAV bytes to whisper-cli via stdin
+    use std::io::Write as _;
+    
+    // Create a temporary WAV file using tempfile Builder
+    let mut temp_file = tempfile::Builder::new()
+        .suffix(".wav")
+        .tempfile()
+        .map_err(|e| format!("Falha ao criar arquivo temporário de áudio: {e}"))?;
+        
+    temp_file.write_all(wav_bytes)
+        .map_err(|e| format!("Falha ao gravar áudio no arquivo temporário: {e}"))?;
+        
+    temp_file.flush()
+        .map_err(|e| format!("Falha ao descarregar buffer no arquivo temporário: {e}"))?;
+        
+    let temp_path = temp_file.path().to_path_buf();
+    let output_txt_path = std::path::PathBuf::from(format!("{}.txt", temp_path.display()));
+    
     let mut child = TokioCommand::new(sidecar_path)
-        .arg("-m")
+        .arg("--model")
         .arg(model_path)
-        .arg("-f")
-        .arg("-")
-        .arg("-nt")
-        .stdin(Stdio::piped())
+        .arg("--file")
+        .arg(&temp_path)
+        .arg("--language")
+        .arg(language)
+        .arg("--output-txt")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Falha ao iniciar o processo whisper-cli: {e}"))?;
         
-    if let Some(mut stdin) = child.stdin.take() {
-        use tokio::io::AsyncWriteExt;
-        if let Err(e) = stdin.write_all(wav_bytes).await {
-            tracing::warn!("Falha ao escrever no pipe stdin, tentando com arquivo temporário: {e}");
-            return run_transcription_with_tempfile(sidecar_path, model_path, wav_bytes).await;
-        }
-    }
-    
-    let mut stdout_stream = child.stdout.take().ok_or("Falha ao abrir stdout do whisper-cli")?;
-    let mut stderr_stream = child.stderr.take().ok_or("Falha ao abrir stderr do whisper-cli")?;
-    
     let timeout = Duration::from_secs(5);
     let status = match tokio::time::timeout(timeout, child.wait()).await {
         Ok(Ok(status)) => status,
@@ -136,76 +144,33 @@ async fn run_transcription_internal(
         }
     };
     
-    let mut stdout_bytes = Vec::new();
-    let mut stderr_bytes = Vec::new();
-    use tokio::io::AsyncReadExt as _;
-    let _ = stdout_stream.read_to_end(&mut stdout_bytes).await;
-    let _ = stderr_stream.read_to_end(&mut stderr_bytes).await;
-    
-    if !status.success() {
-        let stderr = String::from_utf8_lossy(&stderr_bytes);
-        tracing::warn!("whisper-cli retornou erro: {stderr}. Tentando fallback com arquivo temporário.");
-        return run_transcription_with_tempfile(sidecar_path, model_path, wav_bytes).await;
-    }
-    
-    let transcription = String::from_utf8_lossy(&stdout_bytes).trim().to_string();
-    Ok(transcription)
-}
-
-async fn run_transcription_with_tempfile(
-    sidecar_path: &std::path::Path,
-    model_path: &str,
-    wav_bytes: &[u8],
-) -> Result<String, String> {
-    use std::io::Write as _;
-    
-    // Create a temporary file that is automatically deleted when dropped
-    let mut temp_file = tempfile::NamedTempFile::new()
-        .map_err(|e| format!("Falha ao criar arquivo temporário de áudio: {e}"))?;
-        
-    temp_file.write_all(wav_bytes)
-        .map_err(|e| format!("Falha ao gravar áudio no arquivo temporário: {e}"))?;
-        
-    let temp_path = temp_file.path().to_path_buf();
-    
-    let mut child = TokioCommand::new(sidecar_path)
-        .arg("-m")
-        .arg(model_path)
-        .arg("-f")
-        .arg(&temp_path)
-        .arg("-nt")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Falha ao iniciar o processo whisper-cli com arquivo temporário: {e}"))?;
-        
-    let mut stdout_stream = child.stdout.take().ok_or("Falha ao abrir stdout do whisper-cli")?;
-    let mut stderr_stream = child.stderr.take().ok_or("Falha ao abrir stderr do whisper-cli")?;
-    
-    let timeout = Duration::from_secs(5);
-    let status = match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(Ok(status)) => status,
-        Ok(Err(e)) => return Err(format!("Erro ao aguardar whisper-cli: {e}")),
-        Err(_) => {
-            let _ = child.kill().await;
-            return Err("A transcrição com arquivo temporário excedeu 5s e o processo foi finalizado".to_string());
-        }
-    };
-    
-    // The tempfile is deleted from disk here when dropped
+    // The WAV tempfile is deleted from disk here when dropped
     drop(temp_file);
     
-    let mut stdout_bytes = Vec::new();
-    let mut stderr_bytes = Vec::new();
-    use tokio::io::AsyncReadExt as _;
-    let _ = stdout_stream.read_to_end(&mut stdout_bytes).await;
-    let _ = stderr_stream.read_to_end(&mut stderr_bytes).await;
-    
-    if !status.success() {
+    let transcription = if status.success() && output_txt_path.exists() {
+        let content = tokio::fs::read_to_string(&output_txt_path).await
+            .map_err(|e| format!("Falha ao ler resultado da transcrição: {e}"))?;
+        content.trim().to_string()
+    } else {
+        let mut stderr_bytes = Vec::new();
+        if let Some(mut stderr_stream) = child.stderr.take() {
+            use tokio::io::AsyncReadExt;
+            let _ = stderr_stream.read_to_end(&mut stderr_bytes).await;
+        }
         let stderr = String::from_utf8_lossy(&stderr_bytes);
-        return Err(format!("O processo whisper-cli falhou: {stderr}"));
+        
+        // Clean up the .txt file if it exists (even on error)
+        if output_txt_path.exists() {
+            let _ = tokio::fs::remove_file(&output_txt_path).await;
+        }
+        
+        return Err(format!("O processo whisper-cli falhou ou não gerou o arquivo de saída. Status: {status:?}. Stderr: {stderr}"));
+    };
+    
+    // Clean up the generated .txt file
+    if output_txt_path.exists() {
+        let _ = tokio::fs::remove_file(&output_txt_path).await;
     }
     
-    let transcription = String::from_utf8_lossy(&stdout_bytes).trim().to_string();
     Ok(transcription)
 }

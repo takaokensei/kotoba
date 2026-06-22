@@ -7,11 +7,23 @@ fn main() {
     // Parse arguments roughly
     let args: Vec<String> = env::args().collect();
     
-    // Check if we need to read from stdin
+    // Check if we need to read from stdin or file parameters
     let mut read_stdin = false;
+    let mut file_path = None;
+    let mut output_txt = false;
+    
     for (i, arg) in args.iter().enumerate() {
-        if arg == "-f" && i + 1 < args.len() && args[i + 1] == "-" {
-            read_stdin = true;
+        if arg == "-f" || arg == "--file" {
+            if i + 1 < args.len() {
+                if args[i + 1] == "-" {
+                    read_stdin = true;
+                } else {
+                    file_path = Some(&args[i + 1]);
+                }
+            }
+        }
+        if arg == "--output-txt" || arg == "-otxt" {
+            output_txt = true;
         }
     }
     
@@ -29,6 +41,13 @@ fn main() {
     let transcription = env::var("KOTOBA_MOCK_TRANSCRIPTION")
         .unwrap_or_else(|_| "mock transcription".to_string());
         
+    if output_txt {
+        if let Some(path) = file_path {
+            let out_path = format!("{}.txt", path);
+            let _ = std::fs::write(&out_path, &transcription);
+        }
+    }
+    
     // Print transcription to stdout
     println!("{}", transcription);
 }

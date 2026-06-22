@@ -138,7 +138,13 @@ pub async fn record_and_transcribe(
         .iter()
         .find(|m| m.name == "whisper-tiny")
         .ok_or_else(|| "Modelo 'whisper-tiny' não está instalado. Por favor, conclua o onboarding.".to_string())?;
-    let transcript = sidecar_lifecycle::run_whisper_transcription(&app, &whisper_model.path, &wav_bytes).await?;
+        
+    // 3. Get practice language from settings
+    let language = db::get_practice_language(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        
+    let transcript = sidecar_lifecycle::run_whisper_transcription(&app, &whisper_model.path, &language, &wav_bytes).await?;
     
     Ok(transcript)
 }
