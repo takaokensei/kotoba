@@ -56,6 +56,18 @@ pub fn normalized_similarity(target: &str, spoken: &str) -> f64 {
 /// Strips Japanese and Western punctuation before comparison so that
 /// Whisper voice-inflection artifacts (e.g. "ありがとう！") do not
 /// penalise otherwise perfect matches.
+fn katakana_to_hiragana(c: char) -> char {
+    let cp = c as u32;
+    if (0x30A1..=0x30F6).contains(&cp) {
+        std::char::from_u32(cp - 0x60).unwrap_or(c)
+    } else {
+        c
+    }
+}
+
+/// Strips Japanese and Western punctuation, and normalises Katakana to Hiragana
+/// before comparison so that Whisper voice-inflection artifacts (e.g. "ありがとう！")
+/// and kana variation (e.g. "キップ" vs "きっぷ") do not penalise matches.
 fn normalize_for_compare(s: &str) -> String {
     const STRIP: &[char] = &[
         // Japanese punctuation
@@ -68,6 +80,7 @@ fn normalize_for_compare(s: &str) -> String {
         .to_lowercase()
         .chars()
         .filter(|c| !STRIP.contains(c))
+        .map(katakana_to_hiragana)
         .collect()
 }
 
@@ -124,6 +137,18 @@ mod tests {
         assert!(
             (normalized_similarity("water", "water.") - 1.0).abs() < f64::EPSILON,
             "trailing period should be stripped"
+        );
+    }
+
+    #[test]
+    fn katakana_to_hiragana_perfect_match() {
+        assert!(
+            (normalized_similarity("きっぷ", "キップ") - 1.0).abs() < f64::EPSILON,
+            "katakana and hiragana should match perfectly"
+        );
+        assert!(
+            (normalized_similarity("ありがとう", "アリガトウ") - 1.0).abs() < f64::EPSILON,
+            "katakana and hiragana should match perfectly"
         );
     }
 }

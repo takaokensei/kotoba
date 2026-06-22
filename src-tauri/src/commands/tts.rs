@@ -102,14 +102,23 @@ pub async fn speak_word(
 
         // rodio v0.22 API: open the OS audio sink, then use the convenience
         // `rodio::play()` helper which creates a Player and queues the source.
-        let sink_handle = rodio::DeviceSinkBuilder::open_default_sink()
+        let mut sink_handle = rodio::DeviceSinkBuilder::open_default_sink()
             .map_err(|e| format!("No audio output device available: {e}"))?;
+
+        // Prevent warnings since we manage the sink lifetime explicitly here
+        sink_handle.log_on_drop(false);
+
+        // Give the audio driver/device a tiny bit of time to wake up and unmute
+        std::thread::sleep(std::time::Duration::from_millis(150));
 
         // rodio v0.22: rodio::play() accepts a raw Read+Seek (file) and decodes internally
         let player = rodio::play(&sink_handle.mixer(), file)
             .map_err(|e| format!("Failed to start playback: {e}"))?;
 
         player.sleep_until_end();
+
+        // Give the driver time to flush the remaining hardware buffer to speakers
+        std::thread::sleep(std::time::Duration::from_millis(300));
 
         // temp_path is dropped here → temp file deleted from disk
         drop(temp_path);
