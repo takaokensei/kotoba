@@ -61,8 +61,20 @@ pub fn is_mecab_available(mecab_path_override: Option<&str>) -> bool {
 fn run_mecab(text: &str, exe_path: &Path, dict_dir: &Path) -> Option<String> {
     info!(exe = %exe_path.display(), dict = %dict_dir.display(), text, "sidecar lifecycle: loading MeCab");
 
+    // Runtime safeguard: Ensure mecabrc is not 0 bytes (which crashes portable MeCab initialization)
+    let mecabrc_path = dict_dir.join("mecabrc");
+    if let Ok(metadata) = std::fs::metadata(&mecabrc_path) {
+        if metadata.len() == 0 {
+            if let Err(e) = std::fs::write(&mecabrc_path, "dicdir = .\n") {
+                warn!(path = %mecabrc_path.display(), error = %e, "Failed to write fallback mecabrc");
+            }
+        }
+    }
+
     let mut child = std::process::Command::new(exe_path)
         .current_dir(dict_dir)
+        .arg("-r")
+        .arg(&mecabrc_path)
         .arg("-d")
         .arg(dict_dir)
         .stdin(std::process::Stdio::piped())
