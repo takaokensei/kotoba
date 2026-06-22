@@ -57,6 +57,7 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::settings::delete_model,
+            commands::tutor::generate_tutor_feedback,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
