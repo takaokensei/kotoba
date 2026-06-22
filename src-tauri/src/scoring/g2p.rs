@@ -4,8 +4,13 @@
 //!   - `ja`: MeCab + UniDic sidecar → Katakana → IPA static table.
 //!         Fallback: direct Kana→IPA mapping when MeCab is unavailable.
 //!   - `en`: Static IPA vocabulary table + grapheme fallback.
+//!
+//! # Architecture note (ADR-008 / Section 8 Performance Budget)
+//! All functions in this module are **purely synchronous**. Async DB lookups
+//! for sidecar paths are performed at the Tauri command layer (practice.rs)
+//! and injected here as `mecab_path_override: Option<&str>`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 // ─── Sidecar path helpers ────────────────────────────────────────────────────
@@ -15,22 +20,49 @@ fn resolve_models_dir() -> std::path::PathBuf {
     base.join("kotoba").join("models")
 }
 
-pub fn is_mecab_available() -> bool {
+/// Resolves the path to the MeCab executable and its dictionary directory.
+///
+/// `mecab_path_override` is the path string pre-fetched from `model_manifest`
+/// via an async `.await` at the command layer. Passing `None` triggers the
+/// default AppData fallback — used in unit tests and when the DB record is absent.
+fn resolve_mecab_paths(mecab_path_override: Option<&str>) -> Option<(PathBuf, PathBuf)> {
+    // 1. Use the caller-supplied path (queried asynchronously before entering this fn)
+    if let Some(path_str) = mecab_path_override {
+        let exe_path = PathBuf::from(path_str);
+        if exe_path.exists() {
+            if let Some(dir) = exe_path.parent().map(|p| p.to_path_buf()) {
+                return Some((exe_path, dir));
+            }
+        }
+    }
+
+    // 2. Fallback: check default location in AppData
     let mecab_dir = resolve_models_dir().join("mecab-unidic");
     let mecab_exe = if cfg!(target_os = "windows") {
         mecab_dir.join("mecab.exe")
     } else {
         mecab_dir.join("mecab")
     };
-    mecab_exe.exists()
+
+    if mecab_exe.exists() {
+        return Some((mecab_exe, mecab_dir));
+    }
+
+    None
+}
+
+/// Returns `true` if a usable MeCab installation can be located.
+pub fn is_mecab_available(mecab_path_override: Option<&str>) -> bool {
+    resolve_mecab_paths(mecab_path_override).is_some()
 }
 
 // ─── MeCab sidecar invocation (Section 7-F lifecycle) ───────────────────────
 
 fn run_mecab(text: &str, exe_path: &Path, dict_dir: &Path) -> Option<String> {
-    info!(exe = %exe_path.display(), text, "sidecar lifecycle: loading MeCab");
+    info!(exe = %exe_path.display(), dict = %dict_dir.display(), text, "sidecar lifecycle: loading MeCab");
 
     let mut child = std::process::Command::new(exe_path)
+        .current_dir(dict_dir)
         .arg("-d")
         .arg(dict_dir)
         .stdin(std::process::Stdio::piped())
@@ -305,17 +337,8 @@ pub fn kana_to_ipa(text: &str) -> Vec<String> {
 
 // ─── MeCab→IPA pipeline ─────────────────────────────────────────────────────
 
-fn mecab_g2p(text: &str) -> Option<Vec<String>> {
-    let mecab_dir = resolve_models_dir().join("mecab-unidic");
-    let mecab_exe = if cfg!(target_os = "windows") {
-        mecab_dir.join("mecab.exe")
-    } else {
-        mecab_dir.join("mecab")
-    };
-
-    if !mecab_exe.exists() {
-        return None;
-    }
+fn mecab_g2p(text: &str, mecab_path_override: Option<&str>) -> Option<Vec<String>> {
+    let (mecab_exe, mecab_dir) = resolve_mecab_paths(mecab_path_override)?;
 
     let raw_out = run_mecab(text, &mecab_exe, &mecab_dir)?;
     let reading = parse_mecab_reading(&raw_out);
@@ -369,8 +392,11 @@ fn english_grapheme_fallback(word: &str) -> Vec<String> {
 /// Converts an orthographic string into a vector of clean IPA phoneme tokens.
 ///
 /// # Parameters
-/// - `text` – The target word or phrase.
-/// - `lang` – ISO 639-1 language code (`"ja"` | `"en"`).
+/// - `text`                – The target word or phrase.
+/// - `lang`                – ISO 639-1 language code (`"ja"` | `"en"`).
+/// - `mecab_path_override` – Optional path to the MeCab binary, resolved
+///                           asynchronously by the caller before entering this fn.
+///                           `None` triggers the AppData default-path fallback.
 ///
 /// # Japanese pipeline
 /// 1. Try MeCab + UniDic sidecar (load on demand, unload immediately after).
@@ -379,14 +405,14 @@ fn english_grapheme_fallback(word: &str) -> Vec<String> {
 /// # English pipeline
 /// 1. Static IPA vocabulary lookup.
 /// 2. Grapheme-level approximate fallback.
-pub fn g2p(text: &str, lang: &str) -> Vec<String> {
+pub fn g2p(text: &str, lang: &str, mecab_path_override: Option<&str>) -> Vec<String> {
     let cleaned = text.trim();
     if cleaned.is_empty() {
         return Vec::new();
     }
 
     match lang {
-        "ja" => mecab_g2p(cleaned).unwrap_or_else(|| kana_to_ipa(cleaned)),
+        "ja" => mecab_g2p(cleaned, mecab_path_override).unwrap_or_else(|| kana_to_ipa(cleaned)),
         "en" => {
             let lower = cleaned.to_lowercase();
             english_word_to_ipa(&lower)
@@ -399,12 +425,12 @@ pub fn g2p(text: &str, lang: &str) -> Vec<String> {
     }
 }
 
-/// Returns `"v2-ipa-mecab"` or `"v2-ipa-espeak-fallback"` based on MeCab availability.
+/// Returns `"v2-ipa"` or `"v2-ipa-espeak-fallback"` based on MeCab availability.
 /// Used to set `scoring_version` so heterogeneous comparisons are flagged in history.
-pub fn scoring_version_tag(lang: &str) -> &'static str {
+pub fn scoring_version_tag(lang: &str, mecab_path_override: Option<&str>) -> &'static str {
     if lang == "ja" {
-        if is_mecab_available() {
-            "v2-ipa-mecab"
+        if is_mecab_available(mecab_path_override) {
+            "v2-ipa"
         } else {
             "v2-ipa-espeak-fallback"
         }
@@ -419,9 +445,12 @@ pub fn scoring_version_tag(lang: &str) -> &'static str {
 mod tests {
     use super::*;
 
+    // All tests pass `None` for mecab_path_override — no DB available in unit tests.
+    // The fallback kana→IPA path is exercised directly.
+
     #[test]
     fn test_en_hello() {
-        assert_eq!(g2p("hello", "en"), vec!["h", "ə", "l", "oʊ"]);
+        assert_eq!(g2p("hello", "en", None), vec!["h", "ə", "l", "oʊ"]);
     }
 
     #[test]
@@ -468,7 +497,8 @@ mod tests {
 
     #[test]
     fn test_unknown_lang() {
-        let ipa = g2p("foo", "fr");
+        // None = no MeCab override; must still return empty vec for unknown lang
+        let ipa = g2p("foo", "fr", None);
         assert!(ipa.is_empty());
     }
 }

@@ -68,13 +68,26 @@ pub async fn score_attempt(
     let target = vocab.reading.as_deref().unwrap_or(&vocab.word);
     let lang = vocab.language.as_str();
 
+    // ── Async MeCab path resolution (ADR-008 / Task 4.5-PATCH) ───────────────
+    // Query the DB here with native .await so we never nest a runtime inside
+    // the Tokio executor. The resolved path is forwarded to the pure-sync G2P
+    // functions below as Option<&str>, keeping the scoring engine runtime-free.
+    let mecab_path_opt: Option<String> = sqlx::query_scalar::<_, String>(
+        "SELECT path FROM model_manifest WHERE name = 'mecab-unidic'"
+    )
+    .fetch_optional(pool.inner())
+    .await
+    .ok()
+    .flatten();
+    let mecab_path_ref: Option<&str> = mecab_path_opt.as_deref();
+
     // ── V2 Phonemic Scoring (ADR-008) ──────────────────────────────────────
     // Run both the target and spoken transcription through the G2P dispatcher.
     // For Japanese: MeCab → Katakana → IPA (fallback to direct Kana→IPA).
     // For English:  static IPA dict → grapheme fallback.
-    let target_phonemes = g2p::g2p(target, lang);
-    let spoken_phonemes = g2p::g2p(&transcript, lang);
-    let scoring_tag = g2p::scoring_version_tag(lang);
+    let target_phonemes = g2p::g2p(target, lang, mecab_path_ref);
+    let spoken_phonemes = g2p::g2p(&transcript, lang, mecab_path_ref);
+    let scoring_tag = g2p::scoring_version_tag(lang, mecab_path_ref);
 
     let (score, breakdown, version) = if target_phonemes.is_empty() && spoken_phonemes.is_empty() {
         // Fallback to V1 when G2P yields nothing (e.g. purely kanji input without MeCab)
