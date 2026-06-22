@@ -64,19 +64,6 @@ pub async fn run_piper_tts(
         output_wav_path.to_string()
     };
 
-    // Resolve the espeak-ng-data directory that lives next to the sidecar binary
-    let espeak_data_path = sidecar_path
-        .parent()
-        .map(|p| p.join("espeak-ng-data"))
-        .unwrap_or_else(|| std::path::PathBuf::from("espeak-ng-data"));
-
-    let espeak_data_resolved = if cfg!(target_os = "windows") {
-        get_short_path(&espeak_data_path.to_string_lossy())
-            .unwrap_or_else(|| espeak_data_path.to_string_lossy().to_string())
-    } else {
-        espeak_data_path.to_string_lossy().to_string()
-    };
-
     use tokio::io::AsyncWriteExt as _;
 
     let mut child = TokioCommand::new(&sidecar_path)
@@ -86,8 +73,6 @@ pub async fn run_piper_tts(
         .arg(&config_path_resolved)
         .arg("--output_file")
         .arg(&output_path_resolved)
-        .arg("--espeak-data")
-        .arg(&espeak_data_resolved)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

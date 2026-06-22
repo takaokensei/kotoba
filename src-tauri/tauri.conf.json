@@ -31,6 +31,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": [
+      "share/**/*"
+    ],
     "externalBin": [
       "binaries/whisper-cli",
       "binaries/piper"
