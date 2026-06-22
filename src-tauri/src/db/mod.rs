@@ -6,6 +6,8 @@ use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use tracing::info;
 use uuid::Uuid;
 
+pub mod models;
+
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
     #[error("database error: {0}")]
@@ -70,17 +72,18 @@ async fn seed_vocabulary_if_empty(pool: &SqlitePool) -> Result<()> {
     }
 
     info!("seeding vocabulary from embedded JSON");
-    seed_language(pool, SEED_EN, "en").await?;
-    seed_language(pool, SEED_JA, "ja").await?;
+    let count_en = seed_language(pool, SEED_EN, "en").await?;
+    let count_ja = seed_language(pool, SEED_JA, "ja").await?;
+    info!(total_seeded = count_en + count_ja, "Vocabulary seeding completed successfully on first boot");
     Ok(())
 }
 
-async fn seed_language(pool: &SqlitePool, json: &str, label: &str) -> Result<()> {
+async fn seed_language(pool: &SqlitePool, json: &str, label: &str) -> Result<usize> {
     let entries: Vec<SeedEntry> = serde_json::from_str(json)?;
     let count = entries.len();
     let now = Utc::now().to_rfc3339();
 
-    for entry in entries {
+    for entry in &entries {
         let id = Uuid::new_v4().to_string();
         sqlx::query(
             r#"
@@ -103,7 +106,7 @@ async fn seed_language(pool: &SqlitePool, json: &str, label: &str) -> Result<()>
     }
 
     info!(language = label, count, "seeded vocabulary entries");
-    Ok(())
+    Ok(count)
 }
 
 pub async fn is_onboarding_required(pool: &SqlitePool) -> Result<bool> {
@@ -386,5 +389,287 @@ pub async fn save_practice_language(pool: &SqlitePool, language: &str) -> Result
     .execute(pool)
     .await?;
     Ok(())
+}
+
+// ─── Repository Functions for Session, Telemetry, and Attempt ───
+
+pub async fn get_attempt_by_id(pool: &SqlitePool, id: &str) -> Result<Option<models::Attempt>> {
+    let row = sqlx::query_as::<_, models::Attempt>(
+        r#"
+        SELECT id, vocabulary_id, spoken_transcript, score, score_breakdown, scoring_version,
+               audio_persisted, tutor_feedback, created_at, updated_at
+        FROM attempt
+        WHERE id = ?
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn insert_vocabulary(
+    pool: &SqlitePool,
+    word: &str,
+    reading: Option<&str>,
+    translation: &str,
+    language: &str,
+    difficulty: i64,
+    pitch_pattern: Option<&str>,
+) -> Result<String> {
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+        INSERT INTO vocabulary (id, word, reading, translation, language, difficulty, pitch_pattern, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(&id)
+    .bind(word)
+    .bind(reading)
+    .bind(translation)
+    .bind(language)
+    .bind(difficulty)
+    .bind(pitch_pattern)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(id)
+}
+
+pub async fn update_vocabulary(
+    pool: &SqlitePool,
+    id: &str,
+    word: &str,
+    reading: Option<&str>,
+    translation: &str,
+    difficulty: i64,
+    pitch_pattern: Option<&str>,
+) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+        UPDATE vocabulary
+        SET word = ?, reading = ?, translation = ?, difficulty = ?, pitch_pattern = ?, updated_at = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(word)
+    .bind(reading)
+    .bind(translation)
+    .bind(difficulty)
+    .bind(pitch_pattern)
+    .bind(&now)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_vocabulary(pool: &SqlitePool, id: &str) -> Result<Option<models::Vocabulary>> {
+    let row = sqlx::query_as::<_, models::Vocabulary>(
+        r#"
+        SELECT id, word, reading, translation, language, difficulty, pitch_pattern, created_at, updated_at
+        FROM vocabulary
+        WHERE id = ?
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn insert_session(
+    pool: &SqlitePool,
+    duration_seconds: i64,
+    words_practiced: i64,
+    average_score: f64,
+) -> Result<String> {
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+        INSERT INTO session (id, duration_seconds, words_practiced, average_score, started_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(&id)
+    .bind(duration_seconds)
+    .bind(words_practiced)
+    .bind(average_score)
+    .bind(&now)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(id)
+}
+
+pub async fn update_session(
+    pool: &SqlitePool,
+    id: &str,
+    duration_seconds: i64,
+    words_practiced: i64,
+    average_score: f64,
+) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+        UPDATE session
+        SET duration_seconds = ?, words_practiced = ?, average_score = ?, updated_at = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(duration_seconds)
+    .bind(words_practiced)
+    .bind(average_score)
+    .bind(&now)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_session_by_id(pool: &SqlitePool, id: &str) -> Result<Option<models::Session>> {
+    let row = sqlx::query_as::<_, models::Session>(
+        r#"
+        SELECT id, duration_seconds, words_practiced, average_score, started_at, updated_at
+        FROM session
+        WHERE id = ?
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn insert_telemetry(
+    pool: &SqlitePool,
+    attempt_id: Option<&str>,
+    stt_latency_ms: Option<i64>,
+    scoring_latency_ms: Option<i64>,
+    llm_latency_ms: Option<i64>,
+    tts_latency_ms: Option<i64>,
+) -> Result<i64> {
+    let now = Utc::now().to_rfc3339();
+    let res = sqlx::query(
+        r#"
+        INSERT INTO telemetry (attempt_id, stt_latency_ms, scoring_latency_ms, llm_latency_ms, tts_latency_ms, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(attempt_id)
+    .bind(stt_latency_ms)
+    .bind(scoring_latency_ms)
+    .bind(llm_latency_ms)
+    .bind(tts_latency_ms)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(res.last_insert_rowid())
+}
+
+pub async fn get_telemetry_by_id(pool: &SqlitePool, id: i64) -> Result<Option<models::Telemetry>> {
+    let row = sqlx::query_as::<_, models::Telemetry>(
+        r#"
+        SELECT id, attempt_id, stt_latency_ms, scoring_latency_ms, llm_latency_ms, tts_latency_ms, created_at
+        FROM telemetry
+        WHERE id = ?
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::SqlitePool;
+
+    #[tokio::test]
+    async fn test_database_access_layer_and_updates() {
+        // Create an in-memory SQLite database pool for testing
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+
+        // Run migrations on the in-memory database
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        // 1. Test Seeding (in-memory will trigger seeding since count is 0)
+        seed_vocabulary_if_empty(&pool).await.unwrap();
+        let seed_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM vocabulary")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(seed_count.0 > 0, "Seeding count should be greater than zero");
+
+        // 2. Test Vocabulary Insert and Retrieval
+        let vocab_id = insert_vocabulary(
+            &pool,
+            "テスト",
+            Some("てすと"),
+            "test",
+            "ja",
+            1,
+            Some("heiban"),
+        )
+        .await
+        .unwrap();
+
+        let vocab = get_vocabulary(&pool, &vocab_id).await.unwrap().unwrap();
+        assert_eq!(vocab.word, "テスト");
+        assert_eq!(vocab.translation, "test");
+        assert_eq!(vocab.created_at, vocab.updated_at);
+
+        // Wait a brief moment to ensure time difference if any
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // 3. Test Vocabulary Update (Enforce updated_at programmatic recalculation)
+        update_vocabulary(
+            &pool,
+            &vocab_id,
+            "テスト改",
+            Some("てすとかい"),
+            "test modified",
+            2,
+            Some("atamadaka"),
+        )
+        .await
+        .unwrap();
+
+        let updated_vocab = get_vocabulary(&pool, &vocab_id).await.unwrap().unwrap();
+        assert_eq!(updated_vocab.word, "テスト改");
+        assert_eq!(updated_vocab.difficulty, 2);
+        assert_ne!(updated_vocab.created_at, updated_vocab.updated_at, "updated_at should be updated");
+
+        // 4. Test Session Insert, Update and Retrieval
+        let session_id = insert_session(&pool, 300, 5, 85.5).await.unwrap();
+        let session = get_session_by_id(&pool, &session_id).await.unwrap().unwrap();
+        assert_eq!(session.duration_seconds, 300);
+        assert_eq!(session.words_practiced, 5);
+        assert_eq!(session.average_score, 85.5);
+        assert_eq!(session.started_at, session.updated_at);
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        update_session(&pool, &session_id, 350, 6, 88.0).await.unwrap();
+        let updated_session = get_session_by_id(&pool, &session_id).await.unwrap().unwrap();
+        assert_eq!(updated_session.duration_seconds, 350);
+        assert_eq!(updated_session.words_practiced, 6);
+        assert_eq!(updated_session.average_score, 88.0);
+        assert_ne!(updated_session.started_at, updated_session.updated_at, "Session updated_at should be updated");
+
+        // 5. Test Telemetry Insert and Retrieval
+        let telemetry_id = insert_telemetry(&pool, None, Some(100), Some(50), Some(200), Some(150)).await.unwrap();
+        let telemetry = get_telemetry_by_id(&pool, telemetry_id).await.unwrap().unwrap();
+        assert_eq!(telemetry.stt_latency_ms, Some(100));
+        assert_eq!(telemetry.scoring_latency_ms, Some(50));
+        assert_eq!(telemetry.llm_latency_ms, Some(200));
+        assert_eq!(telemetry.tts_latency_ms, Some(150));
+    }
 }
 
