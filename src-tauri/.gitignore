@@ -9,3 +9,4 @@
 # Sidecar binaries compiled locally
 /binaries/*.exe
 /binaries/*.pdb
+/binaries/*.dll
