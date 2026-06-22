@@ -409,6 +409,8 @@ gh pr merge --squash --delete-branch
 
 `feat:` nova funcionalidade. `fix:` correção. `chore:` configuração/build. `arch:` decisão arquitetural (ADR).
 
+- **Idioma dos Commits:** Todas as mensagens de commit e descrições de Pull Request devem ser escritas obrigatoriamente em **inglês** (ex: usar `feat: integrate deterministic scoring with real STT` em vez de português). Isso garante a portabilidade do projeto para a comunidade internacional e eleva o nível de maturidade do portfólio técnico.
+
 ### 🚨 Tratamento de Erros Obrigatório
 
 - Logging estruturado em todas as camadas Rust (`tracing` crate recomendado).
