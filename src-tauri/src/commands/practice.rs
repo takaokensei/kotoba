@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tauri::State;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::db;
 use crate::scoring::{composition::{self, ScoreBreakdown}, g2p};
-use crate::audio::{capture, sidecar_lifecycle};
+use crate::audio::capture;
+
+pub static LAST_STT_LATENCY: AtomicI64 = AtomicI64::new(-1);
 
 fn resolve_recordings_dir() -> std::path::PathBuf {
     let base = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -85,6 +88,7 @@ pub async fn score_attempt(
     // Run both the target and spoken transcription through the G2P dispatcher.
     // For Japanese: MeCab → Katakana → IPA (fallback to direct Kana→IPA).
     // For English:  static IPA dict → grapheme fallback.
+    let start_scoring = std::time::Instant::now();
     let target_phonemes = g2p::g2p(target, lang, mecab_path_ref);
     let spoken_phonemes = g2p::g2p(&transcript, lang, mecab_path_ref);
     let scoring_tag = g2p::scoring_version_tag(lang, mecab_path_ref);
@@ -96,6 +100,7 @@ pub async fn score_attempt(
     } else {
         composition::compose_v2(target, &transcript, &target_phonemes, &spoken_phonemes, scoring_tag)
     };
+    let scoring_latency = start_scoring.elapsed().as_millis() as i64;
 
     let breakdown_json =
         serde_json::to_string(&breakdown).map_err(|e| e.to_string())?;
@@ -114,6 +119,24 @@ pub async fn score_attempt(
     )
     .await
     .map_err(|e| e.to_string())?;
+
+    // Read and reset STT latency
+    let stt_latency_val = LAST_STT_LATENCY.swap(-1, Ordering::SeqCst);
+    let stt_latency_opt = if stt_latency_val >= 0 { Some(stt_latency_val) } else { None };
+
+    // Insert telemetry record linking back to the new attempt UUID
+    if let Err(e) = db::insert_telemetry(
+        &pool,
+        Some(&attempt_id),
+        stt_latency_opt,
+        Some(scoring_latency),
+        None, // Will be updated in generate_tutor_feedback
+        None,
+    )
+    .await
+    {
+        tracing::error!("Falha ao inserir telemetria: {e}");
+    }
 
     if audio_persisted {
         if let Some(wav_bytes) = capture::take_last_recorded_wav() {
@@ -174,7 +197,35 @@ pub async fn record_and_transcribe(
         .await
         .map_err(|e| e.to_string())?;
         
-    let transcript = sidecar_lifecycle::run_whisper_transcription(&app, &whisper_model.path, &language, &wav_bytes).await?;
+    // Create a temporary file to save the WAV bytes because SttEngine takes &Path
+    let mut temp_file = tempfile::Builder::new()
+        .suffix(".wav")
+        .tempfile()
+        .map_err(|e| format!("Falha ao criar arquivo temporário de áudio: {e}"))?;
+        
+    use std::io::Write as _;
+    temp_file.write_all(&wav_bytes)
+        .map_err(|e| format!("Falha ao gravar áudio no arquivo temporário: {e}"))?;
+    temp_file.flush()
+        .map_err(|e| format!("Falha ao descarregar buffer no arquivo temporário: {e}"))?;
+        
+    let (file, temp_path) = temp_file.into_parts();
+    drop(file);
+
+    use crate::audio::stt::{SttEngine, WhisperEngine};
+    let engine = WhisperEngine {
+        app: app.clone(),
+        model_path: whisper_model.path.clone(),
+        language: language.clone(),
+    };
+
+    let start_stt = std::time::Instant::now();
+    let transcript = engine.transcribe(&temp_path).await?;
+    let stt_duration = start_stt.elapsed().as_millis() as i64;
+    LAST_STT_LATENCY.store(stt_duration, Ordering::SeqCst);
+    
+    // Explicitly clean up the temp path
+    drop(temp_path);
     
     Ok(transcript)
 }

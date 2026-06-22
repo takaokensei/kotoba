@@ -2,3 +2,5 @@
 
 pub mod capture;
 pub mod sidecar_lifecycle;
+pub mod stt;
+pub mod tts;

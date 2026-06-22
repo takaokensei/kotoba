@@ -154,6 +154,8 @@ pub async fn generate_tutor_feedback(
         phonetic_score_str
     );
 
+    let start_llm = std::time::Instant::now();
+
     // 4. Determine which model to use.
     let _ = daemon_waker::ensure_ollama_awake().await;
     let model = get_tutor_model().await;
@@ -189,6 +191,19 @@ pub async fn generate_tutor_feedback(
             return Err(format!("Não foi possível conectar ao Ollama: {e}"))
         }
     };
+
+    let llm_latency = start_llm.elapsed().as_millis() as i64;
+
+    // Update the telemetry record with the measured LLM latency
+    if !attempt_id.is_empty() {
+        let _ = sqlx::query(
+            "UPDATE telemetry SET llm_latency_ms = ? WHERE attempt_id = ?"
+        )
+        .bind(llm_latency)
+        .bind(&attempt_id)
+        .execute(pool.inner())
+        .await;
+    }
 
     // 6. ── HONESTY GATE ────────────────────────────────────────────────────────
     // The gate inspects the LLM output and, if false praise is detected, replaces
