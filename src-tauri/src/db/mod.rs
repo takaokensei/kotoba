@@ -546,6 +546,55 @@ pub async fn get_session_by_id(pool: &SqlitePool, id: &str) -> Result<Option<mod
     Ok(row)
 }
 
+/// Increments `words_practiced`, recalculates `average_score` as a rolling
+/// mean, recomputes `duration_seconds` from `started_at`, and refreshes
+/// `updated_at`.  This is the single write path for in-flight session updates.
+pub async fn record_session_activity(
+    pool: &SqlitePool,
+    session_id: &str,
+    score: f64,
+) -> Result<()> {
+    use tracing::warn;
+
+    let session = match get_session_by_id(pool, session_id).await? {
+        Some(s) => s,
+        None => {
+            warn!(session_id, "record_session_activity: session not found — skipping update");
+            return Ok(());
+        }
+    };
+
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+
+    // Recompute duration from started_at (best-effort; fallback to existing value)
+    let elapsed_secs = chrono::DateTime::parse_from_rfc3339(&session.started_at)
+        .map(|started| (now - started.with_timezone(&Utc)).num_seconds().max(0))
+        .unwrap_or(session.duration_seconds);
+
+    // Rolling average: (prev_avg * prev_count + new_score) / new_count
+    let new_count = session.words_practiced + 1;
+    let new_avg = (session.average_score * session.words_practiced as f64 + score)
+        / new_count as f64;
+
+    sqlx::query(
+        r#"
+        UPDATE session
+        SET duration_seconds = ?, words_practiced = ?, average_score = ?, updated_at = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(elapsed_secs)
+    .bind(new_count)
+    .bind(new_avg)
+    .bind(&now_str)
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 pub async fn insert_telemetry(
     pool: &SqlitePool,
     attempt_id: Option<&str>,
@@ -670,6 +719,33 @@ mod tests {
         assert_eq!(telemetry.scoring_latency_ms, Some(50));
         assert_eq!(telemetry.llm_latency_ms, Some(200));
         assert_eq!(telemetry.tts_latency_ms, Some(150));
+    }
+
+    #[tokio::test]
+    async fn test_record_session_activity_rolling_average() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        // Create a fresh empty session
+        let session_id = insert_session(&pool, 0, 0, 0.0).await.unwrap();
+
+        // First attempt: score 80.0  →  avg = 80.0, count = 1
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        record_session_activity(&pool, &session_id, 80.0).await.unwrap();
+        let s1 = get_session_by_id(&pool, &session_id).await.unwrap().unwrap();
+        assert_eq!(s1.words_practiced, 1);
+        assert!((s1.average_score - 80.0).abs() < 0.001, "avg after 1st attempt should be 80");
+        assert!(s1.duration_seconds >= 0);
+
+        // Second attempt: score 60.0  →  avg = (80+60)/2 = 70.0, count = 2
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        record_session_activity(&pool, &session_id, 60.0).await.unwrap();
+        let s2 = get_session_by_id(&pool, &session_id).await.unwrap().unwrap();
+        assert_eq!(s2.words_practiced, 2);
+        assert!((s2.average_score - 70.0).abs() < 0.001, "avg after 2nd attempt should be 70");
+
+        // Duration should be >= previous (monotonically non-decreasing)
+        assert!(s2.duration_seconds >= s1.duration_seconds);
     }
 }
 

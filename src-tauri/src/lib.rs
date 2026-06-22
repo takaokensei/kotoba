@@ -58,6 +58,8 @@ pub fn run() {
             commands::settings::update_settings,
             commands::settings::delete_model,
             commands::tutor::generate_tutor_feedback,
+            commands::session::start_practice_session,
+            commands::session::record_session_activity,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

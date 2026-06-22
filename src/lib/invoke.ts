@@ -24,6 +24,12 @@ export const recordAndTranscribe = (maxDurationMs: number) =>
 export const scoreAttempt = (vocabularyId: string, transcript: string) =>
   invoke<AttemptResult>("score_attempt", { vocabularyId, transcript });
 
+export const startPracticeSession = () =>
+  invoke<string>("start_practice_session");
+
+export const recordSessionActivity = (sessionId: string, score: number) =>
+  invoke<void>("record_session_activity", { sessionId, score });
+
 export const getTutorFeedback = (
   vocabularyId: string,
   attemptResult: AttemptResult,
