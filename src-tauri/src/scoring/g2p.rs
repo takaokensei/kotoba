@@ -109,9 +109,9 @@ fn run_mecab(text: &str, exe_path: &Path, dict_dir: &Path) -> Option<String> {
             }
         }
 
-        // 3. Write absolute path mecabrc inside the safe directory
+        // 3. Write relative path mecabrc inside the safe directory
         let mecabrc_dest = safe_dir.join("mecabrc");
-        if let Err(e) = std::fs::write(&mecabrc_dest, "dicdir = C:/Users/Public/kotoba/models/mecab-unidic\n") {
+        if let Err(e) = std::fs::write(&mecabrc_dest, "dicdir = .\n") {
             warn!(path = %mecabrc_dest.display(), error = %e, "Failed to write mirror mecabrc");
         }
 
@@ -132,12 +132,16 @@ fn run_mecab(text: &str, exe_path: &Path, dict_dir: &Path) -> Option<String> {
         (exe_path.to_path_buf(), dict_dir.to_path_buf())
     };
 
-    let mut child = std::process::Command::new(&exe_path_to_use)
-        .current_dir(&dict_dir_to_use)
-        .arg("-r")
-        .arg(dict_dir_to_use.join("mecabrc"))
-        .arg("-d")
-        .arg(&dict_dir_to_use)
+    let mut cmd = std::process::Command::new(&exe_path_to_use);
+    cmd.current_dir(&dict_dir_to_use);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        cmd.arg("-r").arg(dict_dir_to_use.join("mecabrc"));
+        cmd.arg("-d").arg(&dict_dir_to_use);
+    }
+
+    let mut child = cmd
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
