@@ -50,24 +50,27 @@ pub async fn speak_word(
             )
         })?;
 
-    // model_entry.path points to the directory; find the .onnx file inside it.
-    let model_dir = std::path::PathBuf::from(&model_entry.path);
+    // model_entry.path is the path to the first downloaded file, which is the .onnx model.
+    // (See downloader.rs: primary_path = dest where dest = model_dir.join(file.filename))
+    let onnx_path = std::path::PathBuf::from(&model_entry.path);
 
-    let onnx_path = std::fs::read_dir(&model_dir)
-        .map_err(|e| format!("Cannot read model directory {:?}: {e}", model_dir))?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .find(|p| p.extension().and_then(|s| s.to_str()) == Some("onnx"))
-        .ok_or_else(|| format!("No .onnx file found in {:?}", model_dir))?;
+    if !onnx_path.exists() {
+        return Err(format!(
+            "Model file not found: {:?}. Please re-run the onboarding to re-download the model.",
+            onnx_path
+        ));
+    }
 
     // The JSON config lives alongside the .onnx with a `.onnx.json` extension.
-    let mut config_path = onnx_path.clone();
     let onnx_filename = onnx_path
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("model.onnx")
         .to_string();
-    config_path.set_file_name(format!("{onnx_filename}.json"));
+    let config_path = onnx_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(format!("{onnx_filename}.json"));
 
     // ── 3. Create temp WAV file and release the handle ───────────────────────
     let temp_file = tempfile::Builder::new()
