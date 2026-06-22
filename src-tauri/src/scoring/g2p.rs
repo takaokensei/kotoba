@@ -72,38 +72,28 @@ fn run_mecab(text: &str, exe_path: &Path, dict_dir: &Path) -> Option<String> {
             }
         }
 
-        // 2. Copy files from original dict_dir if they differ or are not present
-        let files_to_mirror = [
-            "mecab.exe",
-            "libmecab.dll",
-            "char.bin",
-            "matrix.bin",
-            "sys.dic",
-            "unk.dic",
-            "dicrc",
-            "mecabrc",
-            "model.bin",
-        ];
+        // 2. Mirror every file from dict_dir → safe_dir.
+        // Using read_dir instead of a hardcoded list prevents silent crashes
+        // caused by missing UniDic definition files (feature.def, left-id.def,
+        // pos-id.def, rewrite.def, right-id.def) that MeCab needs at startup.
+        if let Ok(entries) = std::fs::read_dir(dict_dir) {
+            for entry in entries.flatten() {
+                if entry.file_type().map_or(false, |ft| ft.is_file()) {
+                    let src = entry.path();
+                    let dest = safe_dir.join(entry.file_name());
 
-        for filename in &files_to_mirror {
-            let src = dict_dir.join(filename);
-            let dest = safe_dir.join(filename);
-            if src.exists() {
-                let should_copy = if !dest.exists() {
-                    true
-                } else {
-                    let src_meta = std::fs::metadata(&src);
-                    let dest_meta = std::fs::metadata(&dest);
-                    if let (Ok(s), Ok(d)) = (src_meta, dest_meta) {
-                        s.len() != d.len()
-                    } else {
+                    let should_copy = if !dest.exists() {
                         true
-                    }
-                };
+                    } else {
+                        let src_size = std::fs::metadata(&src).map(|m| m.len()).unwrap_or(0);
+                        let dest_size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+                        src_size != dest_size
+                    };
 
-                if should_copy {
-                    if let Err(e) = std::fs::copy(&src, &dest) {
-                        warn!(src = %src.display(), dest = %dest.display(), error = %e, "Failed to copy file to safe mirror");
+                    if should_copy {
+                        if let Err(e) = std::fs::copy(&src, &dest) {
+                            warn!(src = %src.display(), dest = %dest.display(), error = %e, "Failed to copy file to safe mirror");
+                        }
                     }
                 }
             }
@@ -161,7 +151,8 @@ fn run_mecab(text: &str, exe_path: &Path, dict_dir: &Path) -> Option<String> {
         Some(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        warn!(stderr = %stderr, "MeCab process failed");
+        let exit_code = output.status.code();
+        warn!(stderr = %stderr, exit_code = ?exit_code, "MeCab process failed");
         None
     }
 }
