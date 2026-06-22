@@ -100,20 +100,39 @@ pub async fn speak_word(
         let file = std::fs::File::open(&*temp_path)
             .map_err(|e| format!("Cannot open generated WAV: {e}"))?;
 
-        // rodio v0.22 API: open the OS audio sink, then use the convenience
-        // `rodio::play()` helper which creates a Player and queues the source.
+        // rodio v0.22 API: open the OS audio sink
         let mut sink_handle = rodio::DeviceSinkBuilder::open_default_sink()
             .map_err(|e| format!("No audio output device available: {e}"))?;
 
         // Prevent warnings since we manage the sink lifetime explicitly here
         sink_handle.log_on_drop(false);
 
-        // Give the audio driver/device a tiny bit of time to wake up and unmute
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        use rodio::Source as _;
 
-        // rodio v0.22: rodio::play() accepts a raw Read+Seek (file) and decodes internally
-        let player = rodio::play(&sink_handle.mixer(), file)
-            .map_err(|e| format!("Failed to start playback: {e}"))?;
+        // Decode the WAV file into samples
+        let decoder = rodio::Decoder::try_from(file)
+            .map_err(|e| format!("Failed to decode WAV: {e}"))?;
+
+        let channels = decoder.channels();
+        let sample_rate = decoder.sample_rate();
+
+        // Precompute 350ms (0.35s) pre-roll silence buffer (zero-valued samples)
+        // Extract primitive values from NonZero types for casting
+        let silence_samples_count = ((sample_rate.get() as f32) * (channels.get() as f32) * 0.35) as usize;
+        let mut all_samples = vec![0.0f32; silence_samples_count];
+
+        // Collect all decoded samples and append them to silence pre-roll
+        let decoded_samples: Vec<f32> = decoder.collect();
+        all_samples.extend(decoded_samples);
+
+        // Construct a SamplesBuffer
+        let source = rodio::buffer::SamplesBuffer::new(channels, sample_rate, all_samples);
+
+        // Connect player to mixer
+        let player = rodio::Player::connect_new(sink_handle.mixer());
+
+        // Queue source and start playback
+        player.append(source);
 
         player.sleep_until_end();
 
