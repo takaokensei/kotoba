@@ -19,7 +19,7 @@ pub fn get_model(name: &str) -> Option<&'static ModelDefinition> {
 }
 
 pub fn required_onboarding_models() -> &'static [&'static str] {
-    &["whisper-tiny", "piper-en"]
+    &["whisper-tiny", "piper-en", "piper-ja"]
 }
 
 const WHISPER_TINY: ModelDefinition = ModelDefinition {
