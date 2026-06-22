@@ -118,7 +118,10 @@ async fn run_transcription_with_tempfile(
     temp_file.flush()
         .map_err(|e| format!("Falha ao descarregar buffer no arquivo temporário: {e}"))?;
         
-    let temp_path = temp_file.path().to_path_buf();
+    // Decouple file handle and path wrapper
+    let (file, temp_path) = temp_file.into_parts();
+    // Drop the file handle immediately to close and release the OS file lock on Windows
+    drop(file);
     
     // Resolve short 8.3 paths on Windows to bypass non-ASCII path issues in whisper.cpp
     let model_path_str = if cfg!(target_os = "windows") {
@@ -151,15 +154,21 @@ async fn run_transcription_with_tempfile(
     let timeout = Duration::from_secs(5);
     let status = match tokio::time::timeout(timeout, child.wait()).await {
         Ok(Ok(status)) => status,
-        Ok(Err(e)) => return Err(format!("Erro ao aguardar whisper-cli: {e}")),
+        Ok(Err(e)) => {
+            // Delete the WAV file if wait fails
+            drop(temp_path);
+            return Err(format!("Erro ao aguardar whisper-cli: {e}"));
+        }
         Err(_) => {
             let _ = child.kill().await;
+            // Delete the WAV file if timeout occurs
+            drop(temp_path);
             return Err("A transcrição do Whisper excedeu o limite de 5s e o processo foi finalizado".to_string());
         }
     };
     
-    // The WAV tempfile is deleted from disk here when dropped
-    drop(temp_file);
+    // The WAV tempfile is deleted from disk here when TempPath is dropped
+    drop(temp_path);
     
     let transcription = if status.success() && output_txt_path.exists() {
         let content = tokio::fs::read_to_string(&output_txt_path).await
