@@ -157,6 +157,28 @@ fn run_mecab(text: &str, exe_path: &Path, dict_dir: &Path) -> Option<String> {
     }
 }
 
+fn clean_unidic_reading(token: &str) -> String {
+    token.chars()
+        .filter(|c| {
+            let val = *c as u32;
+            (0x3040..=0x309F).contains(&val) || (0x30A0..=0x30FF).contains(&val)
+        })
+        .collect()
+}
+
+fn get_clean_kana_field(features: &[&str], idx: usize) -> Option<String> {
+    let raw = features.get(idx).copied().unwrap_or("");
+    if raw.is_empty() || raw == "*" {
+        return None;
+    }
+    let cleaned = clean_unidic_reading(raw);
+    if !cleaned.is_empty() {
+        Some(cleaned)
+    } else {
+        None
+    }
+}
+
 /// Parses MeCab UniDic tab-separated output to extract the Katakana 読み field.
 /// UniDic format (simplified): surface \t pos,pos2,...,orthBase,read,...
 fn parse_mecab_reading(mecab_output: &str) -> String {
@@ -169,14 +191,23 @@ fn parse_mecab_reading(mecab_output: &str) -> String {
         if let Some(tab_idx) = trimmed.find('\t') {
             let features: Vec<&str> = trimmed[tab_idx + 1..].split(',').collect();
             // UniDic field indices: 7 = lemmaReadingForm, 6 = orthBaseForm, 9 = pronunciationForm
-            let reading_token = if features.len() > 7 && features[7] != "*" && !features[7].is_empty() {
-                features[7]
-            } else if features.len() > 9 && features[9] != "*" && !features[9].is_empty() {
-                features[9]
+            let reading_token = if features.len() > 10 {
+                // UniDic (17+ fields)
+                // Prefer index 9 (pronunciationForm), fallback to 10, then 6 (lemmaReadingForm)
+                get_clean_kana_field(&features, 9)
+                    .or_else(|| get_clean_kana_field(&features, 10))
+                    .or_else(|| get_clean_kana_field(&features, 6))
+                    .unwrap_or_else(|| trimmed[..tab_idx].to_string())
+            } else if features.len() >= 9 {
+                // IPADIC (9 fields)
+                // Prefer index 8 (pronunciation), fallback to 7 (reading)
+                get_clean_kana_field(&features, 8)
+                    .or_else(|| get_clean_kana_field(&features, 7))
+                    .unwrap_or_else(|| trimmed[..tab_idx].to_string())
             } else {
-                &trimmed[..tab_idx] // surface form fallback
+                trimmed[..tab_idx].to_string()
             };
-            reading.push_str(reading_token);
+            reading.push_str(&reading_token);
         }
     }
     reading
@@ -568,5 +599,24 @@ mod tests {
         // None = no MeCab override; must still return empty vec for unknown lang
         let ipa = g2p("foo", "fr", None);
         assert!(ipa.is_empty());
+    }
+
+    #[test]
+    fn test_parse_mecab_reading_formats() {
+        // 1. IPADIC (9 fields): Pronunciation at index 8, Reading at index 7.
+        let ipadic_out = "水\t名詞,一般,*,*,*,*,水,ミズ,ミズ\nEOS\n";
+        assert_eq!(parse_mecab_reading(ipadic_out), "ミズ");
+
+        // 2. UniDic (17+ fields): Pronunciation at index 9.
+        let unidic_out = "水\t名詞,普通名詞,一般,*,*,*,スイ,水,水,ミズ,ミズ,水,スイ,水,スイ,混,*,*,*,*,*,*,*,*,*\nEOS\n";
+        assert_eq!(parse_mecab_reading(unidic_out), "ミズ");
+
+        // 3. Fallback: Should use surface form if no fields matched.
+        let fallback_out = "水\t名詞,一般,*,*,*,*,*,*,*\nEOS\n";
+        assert_eq!(parse_mecab_reading(fallback_out), "水");
+
+        // 4. Accent/Formatting cleaning: Should clean UniDic extra format accents or digits.
+        let unidic_accent_out = "水\t名詞,普通名詞,一般,*,*,*,スイ,水,水,ミズ①,ミズ,水,スイ,水,スイ,混,*,*,*,*,*,*,*,*,*\nEOS\n";
+        assert_eq!(parse_mecab_reading(unidic_accent_out), "ミズ");
     }
 }
