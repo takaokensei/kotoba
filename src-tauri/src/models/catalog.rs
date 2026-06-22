@@ -54,12 +54,12 @@ const PIPER_JA: ModelDefinition = ModelDefinition {
     size_mb_estimate: 63,
     files: &[
         ModelFile {
-            url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/ja/ja_JP/hina/medium/ja_JP-hina-medium.onnx",
-            filename: "ja_JP-hina-medium.onnx",
+            url: "https://huggingface.co/ayousanz/piper-plus-tsukuyomi-chan/resolve/main/tsukuyomi-chan-6lang-fp16.onnx",
+            filename: "tsukuyomi-chan-6lang-fp16.onnx",
         },
         ModelFile {
-            url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/ja/ja_JP/hina/medium/ja_JP-hina-medium.onnx.json",
-            filename: "ja_JP-hina-medium.onnx.json",
+            url: "https://huggingface.co/ayousanz/piper-plus-tsukuyomi-chan/resolve/main/config.json",
+            filename: "tsukuyomi-chan-6lang-fp16.onnx.json",
         },
     ],
 };
