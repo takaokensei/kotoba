@@ -38,11 +38,11 @@ const PIPER_EN: ModelDefinition = ModelDefinition {
     size_mb_estimate: 63,
     files: &[
         ModelFile {
-            url: "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
+            url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
             filename: "en_US-lessac-medium.onnx",
         },
         ModelFile {
-            url: "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json",
+            url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json",
             filename: "en_US-lessac-medium.onnx.json",
         },
     ],
@@ -54,11 +54,11 @@ const PIPER_JA: ModelDefinition = ModelDefinition {
     size_mb_estimate: 63,
     files: &[
         ModelFile {
-            url: "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ja/ja_JP/natsuya/medium/ja_JP-natsuya-medium.onnx",
+            url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/ja/ja_JP/natsuya/medium/ja_JP-natsuya-medium.onnx",
             filename: "ja_JP-natsuya-medium.onnx",
         },
         ModelFile {
-            url: "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/ja/ja_JP/natsuya/medium/ja_JP-natsuya-medium.onnx.json",
+            url: "https://huggingface.co/rhasspy/piper-voices/resolve/main/ja/ja_JP/natsuya/medium/ja_JP-natsuya-medium.onnx.json",
             filename: "ja_JP-natsuya-medium.onnx.json",
         },
     ],
