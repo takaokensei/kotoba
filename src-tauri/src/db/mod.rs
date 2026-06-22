@@ -387,3 +387,4 @@ pub async fn save_practice_language(pool: &SqlitePool, language: &str) -> Result
     .await?;
     Ok(())
 }
+

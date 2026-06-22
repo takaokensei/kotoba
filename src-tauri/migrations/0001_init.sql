@@ -45,11 +45,14 @@ CREATE TABLE model_manifest (
 );
 
 CREATE TABLE telemetry (
-    id INTEGER PRIMARY KEY,
-    attempt_id TEXT REFERENCES attempt(id),
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    attempt_id TEXT REFERENCES attempt(id), -- References UUID
     stt_latency_ms INTEGER,
     scoring_latency_ms INTEGER,
     llm_latency_ms INTEGER,
     tts_latency_ms INTEGER,
     created_at TEXT NOT NULL
 );
+
+-- Mandatory index on telemetry UUID FK reference
+CREATE INDEX idx_telemetry_attempt_id ON telemetry(attempt_id);
