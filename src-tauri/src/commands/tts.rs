@@ -6,6 +6,22 @@ use tauri::{AppHandle, State};
 use crate::audio::sidecar_lifecycle::run_piper_tts;
 use crate::db;
 
+use std::sync::{Mutex, OnceLock};
+
+static SINK_INSTANCE: OnceLock<Mutex<Option<rodio::MixerDeviceSink>>> = OnceLock::new();
+
+fn get_or_init_sink() -> Result<std::sync::MutexGuard<'static, Option<rodio::MixerDeviceSink>>, String> {
+    let mutex = SINK_INSTANCE.get_or_init(|| Mutex::new(None));
+    let mut guard = mutex.lock().map_err(|e| format!("Failed to lock audio sink: {e}"))?;
+    if guard.is_none() {
+        let mut sink = rodio::DeviceSinkBuilder::open_default_sink()
+            .map_err(|e| format!("No audio output device available: {e}"))?;
+        sink.log_on_drop(false);
+        *guard = Some(sink);
+    }
+    Ok(guard)
+}
+
 /// Speaks the word identified by `word_id` using Piper TTS.
 ///
 /// Flow:
@@ -100,12 +116,9 @@ pub async fn speak_word(
         let file = std::fs::File::open(&*temp_path)
             .map_err(|e| format!("Cannot open generated WAV: {e}"))?;
 
-        // rodio v0.22 API: open the OS audio sink
-        let mut sink_handle = rodio::DeviceSinkBuilder::open_default_sink()
-            .map_err(|e| format!("No audio output device available: {e}"))?;
-
-        // Prevent warnings since we manage the sink lifetime explicitly here
-        sink_handle.log_on_drop(false);
+        // Get or initialize the global persistent DeviceSink
+        let sink_guard = get_or_init_sink()?;
+        let sink_ref = sink_guard.as_ref().unwrap();
 
         use rodio::Source as _;
 
@@ -116,9 +129,12 @@ pub async fn speak_word(
         let channels = decoder.channels();
         let sample_rate = decoder.sample_rate();
 
-        // Precompute 350ms (0.35s) pre-roll silence buffer (zero-valued samples)
+        let channels_u16 = channels.get();
+        let sample_rate_u32 = sample_rate.get();
+
+        // Precompute 400ms (0.40s) pre-roll silence buffer (zero-valued samples)
         // Extract primitive values from NonZero types for casting
-        let silence_samples_count = ((sample_rate.get() as f32) * (channels.get() as f32) * 0.35) as usize;
+        let silence_samples_count = ((sample_rate_u32 as f32) * (channels_u16 as f32) * 0.40) as usize;
         let mut all_samples = vec![0.0f32; silence_samples_count];
 
         // Collect all decoded samples and append them to silence pre-roll
@@ -128,8 +144,8 @@ pub async fn speak_word(
         // Construct a SamplesBuffer
         let source = rodio::buffer::SamplesBuffer::new(channels, sample_rate, all_samples);
 
-        // Connect player to mixer
-        let player = rodio::Player::connect_new(sink_handle.mixer());
+        // Connect player to persistent mixer
+        let player = rodio::Player::connect_new(sink_ref.mixer());
 
         // Queue source and start playback
         player.append(source);
