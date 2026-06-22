@@ -31,3 +31,4 @@ hex = "0.4"
 futures-util = "0.3"
 cpal = "0.15"
 tempfile = "3"
+rodio = { version = "0.22", default-features = false, features = ["wav", "playback"] }

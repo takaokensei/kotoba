@@ -53,8 +53,22 @@ pub fn normalized_similarity(target: &str, spoken: &str) -> f64 {
     1.0 - (dist as f64 / max_len as f64)
 }
 
+/// Strips Japanese and Western punctuation before comparison so that
+/// Whisper voice-inflection artifacts (e.g. "ありがとう！") do not
+/// penalise otherwise perfect matches.
 fn normalize_for_compare(s: &str) -> String {
-    s.trim().to_lowercase()
+    const STRIP: &[char] = &[
+        // Japanese punctuation
+        '。', '、', '！', '？', '「', '」', '『', '』', '・', '…', '〜',
+        '—', '–',
+        // Western punctuation
+        '!', '?', '.', ',', ':', ';', '"', '\'', '(', ')', '-',
+    ];
+    s.trim()
+        .to_lowercase()
+        .chars()
+        .filter(|c| !STRIP.contains(c))
+        .collect()
 }
 
 #[cfg(test)]
@@ -86,5 +100,30 @@ mod tests {
     fn distance_known_values() {
         assert_eq!(distance("", "abc"), 3);
         assert_eq!(distance("kitten", "sitting"), 3);
+    }
+
+    #[test]
+    fn japanese_punctuation_stripped_perfect_match() {
+        // Whisper often appends 。or！based on voice inflection — must not penalise
+        assert!(
+            (normalized_similarity("ありがとう", "ありがとう！") - 1.0).abs() < f64::EPSILON,
+            "trailing ! should be stripped before comparison"
+        );
+        assert!(
+            (normalized_similarity("ありがとう", "ありがとう。") - 1.0).abs() < f64::EPSILON,
+            "trailing 。 should be stripped before comparison"
+        );
+    }
+
+    #[test]
+    fn western_punctuation_stripped_perfect_match() {
+        assert!(
+            (normalized_similarity("hello", "hello!") - 1.0).abs() < f64::EPSILON,
+            "trailing Western ! should be stripped"
+        );
+        assert!(
+            (normalized_similarity("water", "water.") - 1.0).abs() < f64::EPSILON,
+            "trailing period should be stripped"
+        );
     }
 }

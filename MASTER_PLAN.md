@@ -204,6 +204,28 @@ Objetivo: Sair do "Levenshtein sobre texto" para avaliação fonética real.
 - Pitch accent (japonês): extração de F0 por mora + comparação com dicionário bundlado — componente obrigatório do score para `ja`, não opcional (ver ADR-001 e decisão C, Seção 7).
 - Spaced Repetition (SM-2/FSRS) para repescar palavras com score baixo.
 
+### 🔄 Task 3.X: Gerenciador Dinâmico de Modelos e Motores (STT/TTS) — Multi-Engine Support
+
+**Objetivo:** Transformar a infraestrutura de IA em um sistema agnóstico de motor, permitindo que o usuário escolha o melhor trade-off entre velocidade e precisão com base em seu hardware local, sem nunca depender de serviços externos.
+
+**Requisitos:**
+
+1. **Multi-Engine STT:** Generalizar o `sidecar_lifecycle.rs` e `commands/practice.rs` com uma trait `SttEngine` que abstraia a invocação — implementações concretas: `WhisperCppEngine` (atual), `FasterWhisperEngine` (Python sidecar via `faster-whisper`), e futuramente `OnnxWhisperEngine`. O engine ativo vive em `settings` no SQLite e é lido pelo `AppState` no startup.
+
+2. **Multi-Engine TTS:** Analogamente, uma trait `TtsEngine` — implementações: `PiperEngine` (atual), `KokoroEngine` (ONNX/WASM runtime, fase 2). O motor de TTS para japonês pode ser diferente do de inglês, controlado por `tts_engine_ja` e `tts_engine_en` em `settings`.
+
+3. **Gerenciador de Modelos Dinâmico:** O `Model Manager` (Settings) passa a listar não apenas os modelos instalados, mas também os modelos compatíveis com o hardware detectado (VRAM disponível via `nvml-wrapper` ou `wgpu` device info). Modelos são baixados do Hugging Face via `hf_hub`-compatible URLs definidas no `catalog.rs`, com verificação de checksum SHA-256 e retry automático (já presente no onboarding — reutilizar o downloader).
+
+4. **Hardware-Aware Recommendations:** Na tela de Settings → Model Manager, exibir um badge de recomendação por modelo baseado na VRAM detectada: "Recomendado para seu hardware" (tiny/base para ≤4GB VRAM, small/medium para 4–8GB, large para 8GB+). A lógica de detecção vive em `audio/hardware_probe.rs` — nunca no frontend.
+
+5. **Hot-Swap Seguro:** A troca de engine nunca ocorre durante uma sessão de prática ativa (estado ≠ `IDLE`). A mudança é gravada em `settings` e aplicada na **próxima** sessão — com toast de confirmação na UI ("Alteração aplicada na próxima sessão").
+
+**ADR de referência:** Esta task formaliza e estende as decisões de ADR-002 (multi-versão de scoring), ADR-008 (G2P bifurcado) e ADR-009 (Model Manager) para o plano de engines. Não editar retroativamente esses ADRs — quando implementado, criar ADR-012.
+
+**Gate de entrada:** Não iniciar antes do pipeline TTS com Piper (Sprint 2) estar validado em produção.
+
+---
+
 ### 🧭 SPRINT 5 (Opcional — só após volume real de dados de uso): Learning Intelligence Layer
 
 Objetivo: perfil do aluno + recomendação adaptativa de vocabulário (ver Seção 14).

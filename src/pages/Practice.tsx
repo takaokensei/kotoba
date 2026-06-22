@@ -11,6 +11,7 @@ import {
   getNextWord,
   getTutorFeedback,
   scoreAttempt,
+  speakWord,
 } from "../lib/invoke";
 
 export function PracticePage() {
@@ -33,6 +34,22 @@ export function PracticePage() {
       setState("ERROR");
     }
   }, [setSession, setState]);
+
+  const handlePlayTts = useCallback(async () => {
+    if (!session.currentWord) return;
+    setState("PLAYING_TTS");
+    try {
+      await speakWord(session.currentWord.id);
+    } catch (e) {
+      setSession((prev) => ({
+        ...prev,
+        error: e instanceof Error ? e.message : String(e),
+      }));
+    } finally {
+      // Return to AWAITING_INPUT whether TTS succeeded or failed
+      setState("AWAITING_INPUT");
+    }
+  }, [session.currentWord, setSession, setState]);
 
   useEffect(() => {
     loadWord();
@@ -118,13 +135,15 @@ export function PracticePage() {
 
       {session.currentWord && <WordDisplay word={session.currentWord} />}
 
-      {(session.state === "SCORING" || session.state === "FETCHING_FEEDBACK" || session.state === "TRANSCRIBING") && (
+      {(session.state === "SCORING" || session.state === "FETCHING_FEEDBACK" || session.state === "TRANSCRIBING" || session.state === "PLAYING_TTS") && (
         <LoadingSpinner label={
-          session.state === "TRANSCRIBING" 
-            ? "Transcrevendo áudio..." 
-            : session.state === "SCORING" 
-              ? "Calculando score…" 
-              : "Buscando feedback do tutor..."
+          session.state === "TRANSCRIBING"
+            ? "Transcrevendo áudio..."
+            : session.state === "SCORING"
+              ? "Calculando score…"
+              : session.state === "PLAYING_TTS"
+                ? "Reproduzindo pronúncia..."
+                : "Buscando feedback do tutor..."
         } />
       )}
 
@@ -141,7 +160,7 @@ export function PracticePage() {
       <AudioControls
         state={session.state}
         wordLabel={wordLabel}
-        onPlayTts={() => setState("PLAYING_TTS")}
+        onPlayTts={handlePlayTts}
         onStartRecording={handleStartRecording}
         onStopRecording={handleStopRecording}
         onCancelRecording={handleCancelRecording}

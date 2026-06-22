@@ -31,6 +31,94 @@ pub fn unload_piper() {
     tracing::info!("sidecar lifecycle: unloading Piper TTS");
 }
 
+/// Runs Piper TTS to synthesise `text`, writing a WAV file to `output_wav_path`.
+/// Resolves Windows 8.3 short paths for both the model and output file to prevent
+/// crashes on non-ASCII paths (e.g. paths containing accented characters).
+pub async fn run_piper_tts(
+    app: &tauri::AppHandle,
+    model_path: &str,
+    config_path: &str,
+    text: &str,
+    output_wav_path: &str,
+) -> Result<(), String> {
+    load_piper();
+
+    let sidecar_path = resolve_sidecar_path(app, "piper")?;
+    tracing::info!(path = %sidecar_path.display(), "Executando sidecar do Piper");
+
+    let model_path_resolved = if cfg!(target_os = "windows") {
+        get_short_path(model_path).unwrap_or_else(|| model_path.to_string())
+    } else {
+        model_path.to_string()
+    };
+
+    let config_path_resolved = if cfg!(target_os = "windows") {
+        get_short_path(config_path).unwrap_or_else(|| config_path.to_string())
+    } else {
+        config_path.to_string()
+    };
+
+    let output_path_resolved = if cfg!(target_os = "windows") {
+        get_short_path(output_wav_path).unwrap_or_else(|| output_wav_path.to_string())
+    } else {
+        output_wav_path.to_string()
+    };
+
+    use tokio::io::AsyncWriteExt as _;
+
+    let mut child = TokioCommand::new(&sidecar_path)
+        .arg("--model")
+        .arg(&model_path_resolved)
+        .arg("--config")
+        .arg(&config_path_resolved)
+        .arg("--output_file")
+        .arg(&output_path_resolved)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Falha ao iniciar o processo piper: {e}"))?;
+
+    // Feed text into Piper's stdin then close the pipe
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(text.as_bytes())
+            .await
+            .map_err(|e| format!("Falha ao escrever texto no stdin do Piper: {e}"))?;
+        // stdin is dropped here, signalling EOF to the process
+    }
+
+    let timeout = Duration::from_secs(30);
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(status)) => status,
+        Ok(Err(e)) => {
+            unload_piper();
+            return Err(format!("Erro ao aguardar piper: {e}"));
+        }
+        Err(_) => {
+            let _ = child.kill().await;
+            unload_piper();
+            return Err("O processo Piper TTS excedeu o limite de 30s e foi finalizado".to_string());
+        }
+    };
+
+    if !status.success() {
+        let mut stderr_bytes = Vec::new();
+        if let Some(mut stderr_stream) = child.stderr.take() {
+            use tokio::io::AsyncReadExt;
+            let _ = stderr_stream.read_to_end(&mut stderr_bytes).await;
+        }
+        let stderr = String::from_utf8_lossy(&stderr_bytes);
+        unload_piper();
+        return Err(format!(
+            "O processo Piper falhou. Status: {status:?}. Stderr: {stderr}"
+        ));
+    }
+
+    unload_piper();
+    Ok(())
+}
+
 /// Dynamically resolves the sidecar binary path for development and production.
 fn resolve_sidecar_path(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
     #[cfg(target_os = "windows")]
