@@ -1,17 +1,25 @@
-import { useEffect, useState } from "react";
-import { getModelManifest } from "../lib/invoke";
-import type { ModelInfo } from "../lib/types";
+import { useEffect, useState, useCallback } from "react";
+import { listAvailableModels } from "../lib/invoke";
+import type { ModelCatalogEntry } from "../lib/types";
 
 export function useModelStatus() {
-  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [models, setModels] = useState<ModelCatalogEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    getModelManifest()
-      .then(setModels)
-      .catch(console.error)
-      .finally(() => setLoading(false));
+  const refresh = useCallback(async () => {
+    try {
+      const catalog = await listAvailableModels();
+      setModels(catalog);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  return { models, loading };
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  return { models, loading, refresh };
 }
