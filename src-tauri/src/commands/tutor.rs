@@ -15,6 +15,7 @@ use tracing::{info, warn};
 
 use crate::db;
 use crate::llm::honesty_gate::{self, GateVerdict};
+use crate::llm::daemon_waker;
 
 #[derive(Serialize)]
 struct OllamaRequest {
@@ -109,6 +110,7 @@ pub async fn generate_tutor_feedback(
     );
 
     // 4. Determine which model to use.
+    let _ = daemon_waker::ensure_ollama_awake().await;
     let model = get_tutor_model().await;
     info!(model = %model, "Requesting tutor feedback from Ollama");
 
