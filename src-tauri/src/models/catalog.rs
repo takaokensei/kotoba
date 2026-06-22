@@ -64,4 +64,52 @@ const PIPER_JA: ModelDefinition = ModelDefinition {
     ],
 };
 
-static MODELS: &[ModelDefinition] = &[WHISPER_TINY, PIPER_EN, PIPER_JA];
+const MECAB_UNIDIC: ModelDefinition = ModelDefinition {
+    name: "mecab-unidic",
+    version: "1.0.0",
+    size_mb_estimate: 800,
+    files: &[
+        #[cfg(target_os = "windows")]
+        ModelFile {
+            url: "https://huggingface.co/takaokensei/kotoba-resources/resolve/main/mecab-unidic/mecab.exe",
+            filename: "mecab.exe",
+        },
+        #[cfg(not(target_os = "windows"))]
+        ModelFile {
+            url: "https://huggingface.co/takaokensei/kotoba-resources/resolve/main/mecab-unidic/mecab",
+            filename: "mecab",
+        },
+        #[cfg(target_os = "windows")]
+        ModelFile {
+            url: "https://huggingface.co/takaokensei/kotoba-resources/resolve/main/mecab-unidic/libmecab.dll",
+            filename: "libmecab.dll",
+        },
+        ModelFile {
+            url: "https://huggingface.co/takaokensei/kotoba-resources/resolve/main/mecab-unidic/mecabrc",
+            filename: "mecabrc",
+        },
+        ModelFile {
+            url: "https://huggingface.co/takaokensei/kotoba-resources/resolve/main/mecab-unidic/char.bin",
+            filename: "char.bin",
+        },
+        ModelFile {
+            url: "https://huggingface.co/takaokensei/kotoba-resources/resolve/main/mecab-unidic/matrix.bin",
+            filename: "matrix.bin",
+        },
+        ModelFile {
+            url: "https://huggingface.co/takaokensei/kotoba-resources/resolve/main/mecab-unidic/sys.dic",
+            filename: "sys.dic",
+        },
+        ModelFile {
+            url: "https://huggingface.co/takaokensei/kotoba-resources/resolve/main/mecab-unidic/unk.dic",
+            filename: "unk.dic",
+        },
+        ModelFile {
+            url: "https://huggingface.co/takaokensei/kotoba-resources/resolve/main/mecab-unidic/dicrc",
+            filename: "dicrc",
+        },
+    ],
+};
+
+static MODELS: &[ModelDefinition] = &[WHISPER_TINY, PIPER_EN, PIPER_JA, MECAB_UNIDIC];
+
