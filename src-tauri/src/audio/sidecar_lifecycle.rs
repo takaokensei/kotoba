@@ -119,13 +119,27 @@ async fn run_transcription_with_tempfile(
         .map_err(|e| format!("Falha ao descarregar buffer no arquivo temporário: {e}"))?;
         
     let temp_path = temp_file.path().to_path_buf();
-    let output_txt_path = std::path::PathBuf::from(format!("{}.txt", temp_path.display()));
+    
+    // Resolve short 8.3 paths on Windows to bypass non-ASCII path issues in whisper.cpp
+    let model_path_str = if cfg!(target_os = "windows") {
+        get_short_path(model_path).unwrap_or_else(|| model_path.to_string())
+    } else {
+        model_path.to_string()
+    };
+
+    let temp_path_str = if cfg!(target_os = "windows") {
+        get_short_path(&temp_path.to_string_lossy()).unwrap_or_else(|| temp_path.to_string_lossy().to_string())
+    } else {
+        temp_path.to_string_lossy().to_string()
+    };
+    
+    let output_txt_path = std::path::PathBuf::from(format!("{}.txt", temp_path_str));
     
     let mut child = TokioCommand::new(sidecar_path)
         .arg("--model")
-        .arg(model_path)
+        .arg(&model_path_str)
         .arg("--file")
-        .arg(&temp_path)
+        .arg(&temp_path_str)
         .arg("--language")
         .arg(language)
         .arg("--output-txt")
@@ -173,4 +187,39 @@ async fn run_transcription_with_tempfile(
     }
     
     Ok(transcription)
+}
+
+#[cfg(target_os = "windows")]
+extern "system" {
+    fn GetShortPathNameW(
+        lpszLongPath: *const u16,
+        lpszShortPath: *mut u16,
+        cchBuffer: u32,
+    ) -> u32;
+}
+
+#[cfg(target_os = "windows")]
+fn get_short_path(long_path: &str) -> Option<String> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    
+    let wide_path: Vec<u16> = OsStr::new(long_path)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+        
+    unsafe {
+        let len = GetShortPathNameW(wide_path.as_ptr(), std::ptr::null_mut(), 0);
+        if len == 0 {
+            return None;
+        }
+        
+        let mut buffer = vec![0u16; len as usize];
+        let res = GetShortPathNameW(wide_path.as_ptr(), buffer.as_mut_ptr(), len);
+        if res != 0 {
+            Some(String::from_utf16_lossy(&buffer[..res as usize]))
+        } else {
+            None
+        }
+    }
 }
