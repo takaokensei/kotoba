@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use serde::Deserialize;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
-use tracing::{info, warn};
+use tracing::info;
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -204,7 +204,7 @@ pub async fn list_attempts(pool: &SqlitePool, limit: i64) -> Result<Vec<AttemptR
     let rows = sqlx::query_as::<_, AttemptRow>(
         r#"
         SELECT id, vocabulary_id, spoken_transcript, score, score_breakdown, scoring_version,
-               audio_persisted, created_at
+               audio_persisted, tutor_feedback, created_at
         FROM attempt
         ORDER BY created_at DESC
         LIMIT ?
@@ -227,7 +227,33 @@ pub struct AttemptRow {
     pub score_breakdown: String,
     pub scoring_version: String,
     pub audio_persisted: bool,
+    pub tutor_feedback: Option<String>,
     pub created_at: String,
+}
+
+/// Persists the validated tutor feedback text for an existing attempt row.
+///
+/// Called after the Honesty Gate has inspected the LLM response so we only
+/// ever store the final, gate-approved (or fallback) text.
+pub async fn update_attempt_feedback(
+    pool: &SqlitePool,
+    attempt_id: &str,
+    feedback: &str,
+) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        r#"
+        UPDATE attempt
+        SET tutor_feedback = ?, updated_at = ?
+        WHERE id = ?
+        "#,
+    )
+    .bind(feedback)
+    .bind(&now)
+    .bind(attempt_id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 #[derive(Debug, sqlx::FromRow, serde::Serialize)]

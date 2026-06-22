@@ -35,11 +35,13 @@ export const getTutorFeedback = (
 
 export const generateTutorFeedback = (
   wordId: string,
+  attemptId: string,
   userTranscription: string,
   score: number,
 ) =>
   invoke<string>("generate_tutor_feedback", {
     wordId,
+    attemptId,
     userTranscription,
     score,
   });

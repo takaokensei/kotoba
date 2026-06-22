@@ -66,7 +66,7 @@ export function PracticePage() {
       let feedbackText = "";
       let llmUnavailable = false;
       try {
-        feedbackText = await generateTutorFeedback(session.currentWord.id, finalTranscript, attempt.score);
+        feedbackText = await generateTutorFeedback(session.currentWord.id, attempt.id, finalTranscript, attempt.score);
       } catch (e) {
         feedbackText = "O tutor local está offline. Certifique-se de que o Ollama está rodando no seu computador com o modelo carregado para receber feedback personalizado.";
         llmUnavailable = true;
