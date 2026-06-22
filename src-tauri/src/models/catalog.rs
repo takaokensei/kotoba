@@ -108,6 +108,10 @@ const MECAB_UNIDIC: ModelDefinition = ModelDefinition {
             url: "https://huggingface.co/takaokensei/kotoba-resources/resolve/main/mecab-unidic/dicrc",
             filename: "dicrc",
         },
+        ModelFile {
+            url: "https://huggingface.co/takaokensei/kotoba-resources/resolve/main/mecab-unidic/model.bin",
+            filename: "model.bin",
+        },
     ],
 };
 

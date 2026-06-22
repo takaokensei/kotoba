@@ -82,6 +82,7 @@ fn run_mecab(text: &str, exe_path: &Path, dict_dir: &Path) -> Option<String> {
             "unk.dic",
             "dicrc",
             "mecabrc",
+            "model.bin",
         ];
 
         for filename in &files_to_mirror {
