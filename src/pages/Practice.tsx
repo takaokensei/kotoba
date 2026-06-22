@@ -9,7 +9,7 @@ import { usePracticeSession } from "../hooks/usePracticeSession";
 import { useAudioCapture } from "../hooks/useAudioCapture";
 import {
   getNextWord,
-  getTutorFeedback,
+  generateTutorFeedback,
   scoreAttempt,
   speakWord,
 } from "../lib/invoke";
@@ -62,7 +62,22 @@ export function PracticePage() {
       const finalTranscript = transcript.trim();
       const attempt = await scoreAttempt(session.currentWord.id, finalTranscript);
       setState("FETCHING_FEEDBACK");
-      const feedback = await getTutorFeedback(session.currentWord.id, attempt);
+      
+      let feedbackText = "";
+      let llmUnavailable = false;
+      try {
+        feedbackText = await generateTutorFeedback(session.currentWord.id, finalTranscript, attempt.score);
+      } catch (e) {
+        feedbackText = "O tutor local está offline. Certifique-se de que o Ollama está rodando no seu computador com o modelo carregado para receber feedback personalizado.";
+        llmUnavailable = true;
+      }
+
+      const feedback = {
+        text: feedbackText,
+        corrections: [],
+        llmUnavailable,
+      };
+
       setSession((prev) => ({ ...prev, attempt, feedback, state: "SHOWING_RESULT" }));
     } catch (e) {
       setSession((prev) => ({
@@ -135,26 +150,21 @@ export function PracticePage() {
 
       {session.currentWord && <WordDisplay word={session.currentWord} />}
 
-      {(session.state === "SCORING" || session.state === "FETCHING_FEEDBACK" || session.state === "TRANSCRIBING" || session.state === "PLAYING_TTS") && (
+      {(session.state === "SCORING" || session.state === "TRANSCRIBING" || session.state === "PLAYING_TTS") && (
         <LoadingSpinner label={
           session.state === "TRANSCRIBING"
             ? "Transcrevendo áudio..."
             : session.state === "SCORING"
               ? "Calculando score…"
-              : session.state === "PLAYING_TTS"
-                ? "Reproduzindo pronúncia..."
-                : "Buscando feedback do tutor..."
+              : "Reproduzindo pronúncia..."
         } />
       )}
 
       {session.state === "SHOWING_RESULT" && session.attempt && (
-        <>
-          <ScoreDisplay
-            score={session.attempt.score}
-            breakdown={session.attempt.scoreBreakdown}
-          />
-          {session.feedback && <FeedbackPanel feedback={session.feedback} />}
-        </>
+        <ScoreDisplay
+          score={session.attempt.score}
+          breakdown={session.attempt.scoreBreakdown}
+        />
       )}
 
       <AudioControls
@@ -166,6 +176,13 @@ export function PracticePage() {
         onCancelRecording={handleCancelRecording}
         onNext={loadWord}
       />
+
+      {(session.state === "FETCHING_FEEDBACK" || (session.state === "SHOWING_RESULT" && session.feedback)) && (
+        <FeedbackPanel
+          feedback={session.feedback}
+          isLoading={session.state === "FETCHING_FEEDBACK"}
+        />
+      )}
     </main>
   );
 }

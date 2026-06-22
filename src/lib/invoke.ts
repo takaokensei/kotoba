@@ -33,6 +33,17 @@ export const getTutorFeedback = (
     attemptResult,
   });
 
+export const generateTutorFeedback = (
+  wordId: string,
+  userTranscription: string,
+  score: number,
+) =>
+  invoke<string>("generate_tutor_feedback", {
+    wordId,
+    userTranscription,
+    score,
+  });
+
 export const listRecentAttempts = (limit?: number) =>
   invoke<AttemptRow[]>("list_recent_attempts", { limit });
 
