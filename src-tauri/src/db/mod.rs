@@ -174,7 +174,7 @@ pub async fn insert_attempt(
     scoring_version: &str,
     audio_persisted: bool,
 ) -> Result<String> {
-    let id = Uuid::new_v4().to_string();
+    let id = Uuid::now_v7().to_string();
     let now = Utc::now().to_rfc3339();
 
     sqlx::query(

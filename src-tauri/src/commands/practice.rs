@@ -1,4 +1,3 @@
-use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tauri::State;
@@ -6,8 +5,6 @@ use tauri::State;
 use crate::db;
 use crate::scoring::composition::{self, ScoreBreakdown};
 use crate::audio::{capture, sidecar_lifecycle};
-
-static CURRENT_TARGET_WORD: Mutex<Option<String>> = Mutex::new(None);
 
 fn resolve_recordings_dir() -> std::path::PathBuf {
     let base = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -45,12 +42,6 @@ pub async fn get_next_word(
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no vocabulary found for language '{language}'"))?;
-
-    // Store target word for the mock sidecar CLI
-    let word_text = row.reading.clone().unwrap_or_else(|| row.word.clone());
-    if let Ok(mut current) = CURRENT_TARGET_WORD.lock() {
-        *current = Some(word_text);
-    }
 
     Ok(PracticeWord {
         id: row.id,
@@ -147,11 +138,6 @@ pub async fn record_and_transcribe(
         .iter()
         .find(|m| m.name == "whisper-tiny")
         .ok_or_else(|| "Modelo 'whisper-tiny' não está instalado. Por favor, conclua o onboarding.".to_string())?;
-        
-    // 3. Set environment variable for mock sidecar if target word exists
-    let target_word = CURRENT_TARGET_WORD.lock().unwrap().clone().unwrap_or_default();
-    std::env::set_var("KOTOBA_MOCK_TRANSCRIPTION", &target_word);
-    
     let transcript = sidecar_lifecycle::run_whisper_transcription(&app, &whisper_model.path, &wav_bytes).await?;
     
     Ok(transcript)
