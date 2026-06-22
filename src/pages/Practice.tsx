@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { AudioControls } from "../components/practice/AudioControls";
 import { FeedbackPanel } from "../components/practice/FeedbackPanel";
 import { ScoreDisplay } from "../components/practice/ScoreDisplay";
@@ -6,6 +6,7 @@ import { WordDisplay } from "../components/practice/WordDisplay";
 import { ErrorBanner } from "../components/shared/ErrorBanner";
 import { LoadingSpinner } from "../components/shared/LoadingSpinner";
 import { usePracticeSession } from "../hooks/usePracticeSession";
+import { useAudioCapture } from "../hooks/useAudioCapture";
 import {
   getNextWord,
   getTutorFeedback,
@@ -14,6 +15,8 @@ import {
 
 export function PracticePage() {
   const { session, setState, setSession } = usePracticeSession();
+  const audioCapture = useAudioCapture();
+  const recordingPromiseRef = useRef<Promise<string> | null>(null);
   const language = "ja" as const;
 
   const loadWord = useCallback(async () => {
@@ -35,22 +38,75 @@ export function PracticePage() {
     loadWord();
   }, [loadWord]);
 
-  async function handleScoreDemo() {
+  const processTranscription = useCallback(async (transcript: string) => {
     if (!session.currentWord) return;
     setState("SCORING");
     try {
-      const attempt = await scoreAttempt(session.currentWord.id, session.currentWord.reading ?? session.currentWord.word);
+      const finalTranscript = transcript.trim();
+      const attempt = await scoreAttempt(session.currentWord.id, finalTranscript);
+      setState("FETCHING_FEEDBACK");
       const feedback = await getTutorFeedback(session.currentWord.id, attempt);
-      setSession((prev) => ({ ...prev, attempt, feedback }));
-      setState("SHOWING_RESULT");
+      setSession((prev) => ({ ...prev, attempt, feedback, state: "SHOWING_RESULT" }));
     } catch (e) {
       setSession((prev) => ({
         ...prev,
         error: e instanceof Error ? e.message : String(e),
+        state: "ERROR",
       }));
-      setState("ERROR");
     }
-  }
+  }, [session.currentWord, setSession, setState]);
+
+  const handleStartRecording = useCallback(async () => {
+    setState("RECORDING");
+    try {
+      // Start recording with a max duration of 15 seconds
+      const promise = audioCapture.startRecording(15000);
+      recordingPromiseRef.current = promise;
+      
+      const transcript = await promise;
+      
+      // Auto-stop: If it completes natively (max duration reached), trigger processing
+      setSession((prev) => {
+        if (prev.state === "RECORDING") {
+          processTranscription(transcript);
+          return { ...prev, state: "TRANSCRIBING" };
+        }
+        return prev;
+      });
+    } catch (e) {
+      setSession((prev) => ({
+        ...prev,
+        error: e instanceof Error ? e.message : String(e),
+        state: "ERROR",
+      }));
+    }
+  }, [audioCapture, processTranscription, setSession, setState]);
+
+  const handleStopRecording = useCallback(async () => {
+    setState("TRANSCRIBING");
+    await audioCapture.stopRecording();
+    
+    if (recordingPromiseRef.current) {
+      try {
+        const transcript = await recordingPromiseRef.current;
+        await processTranscription(transcript);
+      } catch (e) {
+        setSession((prev) => ({
+          ...prev,
+          error: e instanceof Error ? e.message : String(e),
+          state: "ERROR",
+        }));
+      } finally {
+        recordingPromiseRef.current = null;
+      }
+    }
+  }, [audioCapture, processTranscription, setSession, setState]);
+
+  const handleCancelRecording = useCallback(async () => {
+    setState("AWAITING_INPUT");
+    await audioCapture.cancelRecording();
+    recordingPromiseRef.current = null;
+  }, [audioCapture, setState]);
 
   const wordLabel = session.currentWord?.word ?? "";
 
@@ -62,8 +118,14 @@ export function PracticePage() {
 
       {session.currentWord && <WordDisplay word={session.currentWord} />}
 
-      {(session.state === "SCORING" || session.state === "FETCHING_FEEDBACK") && (
-        <LoadingSpinner label="Calculando score…" />
+      {(session.state === "SCORING" || session.state === "FETCHING_FEEDBACK" || session.state === "TRANSCRIBING") && (
+        <LoadingSpinner label={
+          session.state === "TRANSCRIBING" 
+            ? "Transcrevendo áudio..." 
+            : session.state === "SCORING" 
+              ? "Calculando score…" 
+              : "Buscando feedback do tutor..."
+        } />
       )}
 
       {session.state === "SHOWING_RESULT" && session.attempt && (
@@ -80,20 +142,11 @@ export function PracticePage() {
         state={session.state}
         wordLabel={wordLabel}
         onPlayTts={() => setState("PLAYING_TTS")}
-        onStartRecording={() => setState("RECORDING")}
-        onStopRecording={() => {
-          setState("TRANSCRIBING");
-          handleScoreDemo();
-        }}
-        onCancelRecording={() => setState("AWAITING_INPUT")}
+        onStartRecording={handleStartRecording}
+        onStopRecording={handleStopRecording}
+        onCancelRecording={handleCancelRecording}
         onNext={loadWord}
       />
-
-      {session.state === "AWAITING_INPUT" && (
-        <p style={{ fontSize: "0.875rem", color: "#666", marginTop: "1rem" }}>
-          MVP: gravação/STT chegam na Task 1.3. Use &quot;Gravar&quot; para simular scoring.
-        </p>
-      )}
     </main>
   );
 }

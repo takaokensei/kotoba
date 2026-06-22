@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import type {
   AppSettings,
   AttemptResult,
@@ -79,3 +79,7 @@ export const getSettings = () => invoke<AppSettings>("get_settings");
 
 export const updateSettings = (settings: AppSettings) =>
   invoke<void>("update_settings", { settings });
+
+// ─── Gravação de Áudio ──────────────────────────────────────────
+export const stopRecording = () => emit("stop-recording");
+export const cancelRecording = () => emit("cancel-recording");

@@ -1,9 +1,18 @@
+use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tauri::State;
 
 use crate::db;
 use crate::scoring::composition::{self, ScoreBreakdown};
+use crate::audio::{capture, sidecar_lifecycle};
+
+static CURRENT_TARGET_WORD: Mutex<Option<String>> = Mutex::new(None);
+
+fn resolve_recordings_dir() -> std::path::PathBuf {
+    let base = dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    base.join("kotoba").join("recordings")
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,6 +46,12 @@ pub async fn get_next_word(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("no vocabulary found for language '{language}'"))?;
 
+    // Store target word for the mock sidecar CLI
+    let word_text = row.reading.clone().unwrap_or_else(|| row.word.clone());
+    if let Ok(mut current) = CURRENT_TARGET_WORD.lock() {
+        *current = Some(word_text);
+    }
+
     Ok(PracticeWord {
         id: row.id,
         word: row.word,
@@ -64,6 +79,9 @@ pub async fn score_attempt(
     let breakdown_json =
         serde_json::to_string(&breakdown).map_err(|e| e.to_string())?;
 
+    // Check if user consented to persist audio
+    let audio_persisted = db::get_audio_persisted(&pool).await.unwrap_or(false);
+
     let attempt_id = db::insert_attempt(
         &pool,
         &vocabulary_id,
@@ -71,9 +89,28 @@ pub async fn score_attempt(
         score,
         &breakdown_json,
         version,
+        audio_persisted,
     )
     .await
     .map_err(|e| e.to_string())?;
+
+    if audio_persisted {
+        if let Some(wav_bytes) = capture::take_last_recorded_wav() {
+            let recordings_dir = resolve_recordings_dir();
+            if let Err(e) = std::fs::create_dir_all(&recordings_dir) {
+                tracing::error!("Falha ao criar diretório de gravações: {e}");
+            } else {
+                let file_path = recordings_dir.join(format!("{attempt_id}.wav"));
+                if let Err(e) = std::fs::write(&file_path, wav_bytes) {
+                    tracing::error!("Falha ao gravar arquivo de áudio: {e}");
+                } else {
+                    tracing::info!(path = %file_path.display(), "Áudio gravado com sucesso");
+                }
+            }
+        }
+    } else {
+        capture::clear_last_recorded_wav();
+    }
 
     Ok(AttemptResult {
         id: attempt_id,
@@ -85,8 +122,39 @@ pub async fn score_attempt(
 }
 
 #[tauri::command]
-pub async fn record_and_transcribe(_max_duration_ms: u64) -> Result<String, String> {
-    Err("STT not yet implemented — Sprint 1 Task 1.3".into())
+pub async fn record_and_transcribe(
+    pool: State<'_, SqlitePool>,
+    app: tauri::AppHandle,
+    max_duration_ms: u64,
+) -> Result<String, String> {
+    // 1. Capture microphone audio
+    let wav_bytes_opt = capture::capture_mic_audio(&app, max_duration_ms).await?;
+    
+    let wav_bytes = match wav_bytes_opt {
+        Some(bytes) => bytes,
+        None => return Ok("".to_string()), // Cancelled or empty
+    };
+    
+    // Save to global state so score_attempt can write it if consent is true
+    capture::set_last_recorded_wav(wav_bytes.clone());
+    
+    // 2. Get whisper model path from model manifest
+    let manifest = db::list_model_manifest(&pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        
+    let whisper_model = manifest
+        .iter()
+        .find(|m| m.name == "whisper-tiny")
+        .ok_or_else(|| "Modelo 'whisper-tiny' não está instalado. Por favor, conclua o onboarding.".to_string())?;
+        
+    // 3. Set environment variable for mock sidecar if target word exists
+    let target_word = CURRENT_TARGET_WORD.lock().unwrap().clone().unwrap_or_default();
+    std::env::set_var("KOTOBA_MOCK_TRANSCRIPTION", &target_word);
+    
+    let transcript = sidecar_lifecycle::run_whisper_transcription(&app, &whisper_model.path, &wav_bytes).await?;
+    
+    Ok(transcript)
 }
 
 #[derive(Debug, Serialize)]

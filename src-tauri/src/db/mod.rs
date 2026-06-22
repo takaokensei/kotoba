@@ -172,6 +172,7 @@ pub async fn insert_attempt(
     score: f64,
     score_breakdown: &str,
     scoring_version: &str,
+    audio_persisted: bool,
 ) -> Result<String> {
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
@@ -181,7 +182,7 @@ pub async fn insert_attempt(
         INSERT INTO attempt
             (id, vocabulary_id, spoken_transcript, score, score_breakdown, scoring_version,
              audio_persisted, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, FALSE, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&id)
@@ -190,6 +191,7 @@ pub async fn insert_attempt(
     .bind(score)
     .bind(score_breakdown)
     .bind(scoring_version)
+    .bind(audio_persisted)
     .bind(&now)
     .bind(&now)
     .execute(pool)
@@ -296,8 +298,51 @@ pub async fn list_model_manifest(pool: &SqlitePool) -> Result<Vec<ModelManifestR
     Ok(rows)
 }
 
-pub async fn save_consent(_pool: &SqlitePool, _audio_persisted: bool) -> Result<()> {
-    // MVP: consent flag stored per-attempt at practice time; settings persistence in Sprint 2.
-    warn!("save_consent: settings table not yet implemented — consent stored at attempt level only");
+pub async fn save_consent(pool: &SqlitePool, audio_persisted: bool) -> Result<()> {
+    let value = audio_persisted.to_string();
+    sqlx::query(
+        r#"
+        INSERT INTO settings (key, value)
+        VALUES ('audio_persisted', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        "#,
+    )
+    .bind(value)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_audio_persisted(pool: &SqlitePool) -> Result<bool> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT value FROM settings WHERE key = 'audio_persisted'"
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|(val,)| val == "true").unwrap_or(false))
+}
+
+pub async fn get_practice_language(pool: &SqlitePool) -> Result<String> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT value FROM settings WHERE key = 'practice_language'"
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|(val,)| val).unwrap_or_else(|| "ja".to_string()))
+}
+
+pub async fn save_practice_language(pool: &SqlitePool, language: &str) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO settings (key, value)
+        VALUES ('practice_language', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        "#,
+    )
+    .bind(language)
+    .execute(pool)
+    .await?;
     Ok(())
 }
