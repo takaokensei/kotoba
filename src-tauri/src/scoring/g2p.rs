@@ -61,18 +61,78 @@ pub fn is_mecab_available(mecab_path_override: Option<&str>) -> bool {
 fn run_mecab(text: &str, exe_path: &Path, dict_dir: &Path) -> Option<String> {
     info!(exe = %exe_path.display(), dict = %dict_dir.display(), text, "sidecar lifecycle: loading MeCab");
 
-    // Runtime safeguard: Ensure mecabrc is not 0 bytes (which crashes portable MeCab initialization)
-    let mecabrc_path = dict_dir.join("mecabrc");
-    if let Ok(metadata) = std::fs::metadata(&mecabrc_path) {
-        if metadata.len() == 0 {
-            if let Err(e) = std::fs::write(&mecabrc_path, "dicdir = .\n") {
-                warn!(path = %mecabrc_path.display(), error = %e, "Failed to write fallback mecabrc");
+    #[cfg(target_os = "windows")]
+    let (exe_path_to_use, dict_dir_to_use) = {
+        let safe_dir = PathBuf::from("C:\\Users\\Public\\kotoba\\models\\mecab-unidic");
+        
+        // 1. Create directory if not exists
+        if !safe_dir.exists() {
+            if let Err(e) = std::fs::create_dir_all(&safe_dir) {
+                warn!(path = %safe_dir.display(), error = %e, "Failed to create safe isolation directory");
             }
         }
-    }
 
-    let mut child = std::process::Command::new(exe_path)
-        .current_dir(dict_dir)
+        // 2. Copy files from original dict_dir if they differ or are not present
+        let files_to_mirror = [
+            "mecab.exe",
+            "libmecab.dll",
+            "char.bin",
+            "matrix.bin",
+            "sys.dic",
+            "unk.dic",
+            "dicrc",
+            "mecabrc",
+        ];
+
+        for filename in &files_to_mirror {
+            let src = dict_dir.join(filename);
+            let dest = safe_dir.join(filename);
+            if src.exists() {
+                let should_copy = if !dest.exists() {
+                    true
+                } else {
+                    let src_meta = std::fs::metadata(&src);
+                    let dest_meta = std::fs::metadata(&dest);
+                    if let (Ok(s), Ok(d)) = (src_meta, dest_meta) {
+                        s.len() != d.len()
+                    } else {
+                        true
+                    }
+                };
+
+                if should_copy {
+                    if let Err(e) = std::fs::copy(&src, &dest) {
+                        warn!(src = %src.display(), dest = %dest.display(), error = %e, "Failed to copy file to safe mirror");
+                    }
+                }
+            }
+        }
+
+        // 3. Write absolute path mecabrc inside the safe directory
+        let mecabrc_dest = safe_dir.join("mecabrc");
+        if let Err(e) = std::fs::write(&mecabrc_dest, "dicdir = C:/Users/Public/kotoba/models/mecab-unidic\n") {
+            warn!(path = %mecabrc_dest.display(), error = %e, "Failed to write mirror mecabrc");
+        }
+
+        (safe_dir.join("mecab.exe"), safe_dir)
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let (exe_path_to_use, dict_dir_to_use) = {
+        // Non-windows handles empty mecabrc safeguard normally in-place
+        let mecabrc_path = dict_dir.join("mecabrc");
+        if let Ok(metadata) = std::fs::metadata(&mecabrc_path) {
+            if metadata.len() == 0 {
+                if let Err(e) = std::fs::write(&mecabrc_path, "dicdir = .\n") {
+                    warn!(path = %mecabrc_path.display(), error = %e, "Failed to write fallback mecabrc");
+                }
+            }
+        }
+        (exe_path.to_path_buf(), dict_dir.to_path_buf())
+    };
+
+    let mut child = std::process::Command::new(&exe_path_to_use)
+        .current_dir(&dict_dir_to_use)
         .arg("-r")
         .arg("mecabrc")
         .arg("-d")
