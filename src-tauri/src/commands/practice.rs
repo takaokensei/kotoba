@@ -3,7 +3,7 @@ use sqlx::SqlitePool;
 use tauri::State;
 
 use crate::db;
-use crate::scoring::composition::{self, ScoreBreakdown};
+use crate::scoring::{composition::{self, ScoreBreakdown}, g2p};
 use crate::audio::{capture, sidecar_lifecycle};
 
 fn resolve_recordings_dir() -> std::path::PathBuf {
@@ -66,7 +66,24 @@ pub async fn score_attempt(
         .ok_or_else(|| "vocabulary not found".to_string())?;
 
     let target = vocab.reading.as_deref().unwrap_or(&vocab.word);
-    let (score, breakdown, version) = composition::compose_v1(target, &transcript);
+    let lang = vocab.language.as_str();
+
+    // ── V2 Phonemic Scoring (ADR-008) ──────────────────────────────────────
+    // Run both the target and spoken transcription through the G2P dispatcher.
+    // For Japanese: MeCab → Katakana → IPA (fallback to direct Kana→IPA).
+    // For English:  static IPA dict → grapheme fallback.
+    let target_phonemes = g2p::g2p(target, lang);
+    let spoken_phonemes = g2p::g2p(&transcript, lang);
+    let scoring_tag = g2p::scoring_version_tag(lang);
+
+    let (score, breakdown, version) = if target_phonemes.is_empty() && spoken_phonemes.is_empty() {
+        // Fallback to V1 when G2P yields nothing (e.g. purely kanji input without MeCab)
+        let (s, b, v) = composition::compose_v1(target, &transcript);
+        (s, b, v.to_string())
+    } else {
+        composition::compose_v2(target, &transcript, &target_phonemes, &spoken_phonemes, scoring_tag)
+    };
+
     let breakdown_json =
         serde_json::to_string(&breakdown).map_err(|e| e.to_string())?;
 
@@ -79,7 +96,7 @@ pub async fn score_attempt(
         &transcript,
         score,
         &breakdown_json,
-        version,
+        &version,
         audio_persisted,
     )
     .await
@@ -108,7 +125,7 @@ pub async fn score_attempt(
         transcription: transcript,
         score,
         score_breakdown: breakdown,
-        scoring_version: version.to_string(),
+        scoring_version: version,
     })
 }
 
