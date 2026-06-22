@@ -203,10 +203,22 @@ pub async fn insert_attempt(
 pub async fn list_attempts(pool: &SqlitePool, limit: i64) -> Result<Vec<AttemptRow>> {
     let rows = sqlx::query_as::<_, AttemptRow>(
         r#"
-        SELECT id, vocabulary_id, spoken_transcript, score, score_breakdown, scoring_version,
-               audio_persisted, tutor_feedback, created_at
-        FROM attempt
-        ORDER BY created_at DESC
+        SELECT 
+            a.id, 
+            a.vocabulary_id, 
+            a.spoken_transcript, 
+            a.score, 
+            a.score_breakdown, 
+            a.scoring_version,
+            a.audio_persisted, 
+            a.tutor_feedback, 
+            a.created_at,
+            v.word,
+            v.reading,
+            v.translation
+        FROM attempt a
+        JOIN vocabulary v ON a.vocabulary_id = v.id
+        ORDER BY a.created_at DESC
         LIMIT ?
         "#,
     )
@@ -229,6 +241,9 @@ pub struct AttemptRow {
     pub audio_persisted: bool,
     pub tutor_feedback: Option<String>,
     pub created_at: String,
+    pub word: String,
+    pub reading: Option<String>,
+    pub translation: String,
 }
 
 /// Persists the validated tutor feedback text for an existing attempt row.

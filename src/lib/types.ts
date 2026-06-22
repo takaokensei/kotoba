@@ -95,7 +95,11 @@ export interface AttemptRow {
   scoreBreakdown: string;
   scoringVersion: string;
   audioPersisted: boolean;
+  tutorFeedback: string | null;
   createdAt: string;
+  word: string;
+  reading: string | null;
+  translation: string;
 }
 
 export interface AppSettings {
