@@ -135,10 +135,11 @@ fn run_mecab(text: &str, exe_path: &Path, dict_dir: &Path) -> Option<String> {
     let mut cmd = std::process::Command::new(&exe_path_to_use);
     cmd.current_dir(&dict_dir_to_use);
 
-    // Pass absolute paths explicitly. For Windows, they point to the safe Public folder
-    // which contains no spaces or accents, preventing Win32 ANSI boundary expansions.
-    cmd.arg("-r").arg(dict_dir_to_use.join("mecabrc"));
-    cmd.arg("-d").arg(&dict_dir_to_use);
+    // Use relative tokens so the Win32 C++ CLI parser never encounters backslashes.
+    // .current_dir() anchors the process inside the safe ASCII Public path, so any
+    // internal GetCurrentDirectoryA() expansion stays clean and backslash-free.
+    cmd.arg("-r").arg("mecabrc");
+    cmd.arg("-d").arg(".");
 
     let mut child = cmd
         .stdin(std::process::Stdio::piped())
